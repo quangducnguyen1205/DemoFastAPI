@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from .routers import users
 from .database import engine, Base
 import time
+from contextlib import asynccontextmanager
 
 # Create database tables
 def create_tables():
@@ -19,19 +20,25 @@ def create_tables():
             else:
                 raise
 
-# Create FastAPI app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run initialization and optional teardown.
+
+    Replaces deprecated @app.on_event('startup') / 'shutdown'.
+    """
+    create_tables()  # startup work
+    yield            # application runs
+    # (optional) add teardown / cleanup code here
+
+# Create FastAPI app with lifespan handler
 app = FastAPI(
     title="User Management API",
     description="A FastAPI application for managing users with PostgreSQL",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
-
-# Create database tables on startup
-@app.on_event("startup")
-def startup_event():
-    create_tables()
 
 # Include routers
 app.include_router(users.router, prefix="/users", tags=["users"])

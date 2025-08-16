@@ -27,10 +27,8 @@ DemoFirstBackend/
 │   │       └── users.py    # User CRUD routes
 │   ├── requirements.txt    # Python dependencies
 │   └── Dockerfile         # Backend Docker configuration
-├── database/              # Database documentation and config
-│   └── README.md         # Database setup information
-├── docker-compose.yml    # Docker Compose configuration
-├── .env                  # Environment variables
+├── docker compose.yml    # Docker Compose configuration
+├── .env.example           # Environment variables example
 ├── .gitignore           # Git ignore rules
 └── README.md           # This file
 ```
@@ -44,7 +42,7 @@ DemoFirstBackend/
 3. Run the application:
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 The API will be available at:
@@ -153,14 +151,6 @@ curl -X DELETE "http://localhost:8000/users/1"
 
 ## Development
 
-### Running Tests
-
-```bash
-# Add pytest to requirements.txt first
-pip install pytest pytest-asyncio httpx
-pytest
-```
-
 ### Database Migrations
 
 This project uses SQLAlchemy's `create_all()` method for simplicity. For production, consider using Alembic for database migrations.
@@ -181,18 +171,14 @@ This project uses SQLAlchemy's `create_all()` method for simplicity. For product
 4. Add tests if applicable
 5. Submit a pull request
 
-## License
-
-This project is licensed under the MIT License.
-
 # FastAPI User Management API
 
-This is a simple backend system built with **FastAPI**, providing full **CRUD** functionality for user management. It uses **SQLite** as the database and is fully containerized using **Docker**.
+This is a simple backend system built with **FastAPI**, providing full **CRUD** functionality for user management. It is fully containerized using **Docker**.
 
 ## 🚀 Features
 
 - Create / Read / Update / Delete users
-- SQLite + SQLAlchemy ORM
+- SQLAlchemy ORM
 - Pydantic-based validation
 - Swagger UI for interactive testing
 - Dockerized with Gunicorn + Uvicorn worker
