@@ -196,11 +196,11 @@ cd DemoFastAPI
 ```
 ### 2. Build the Docker image
 ```bash
-docker build -t fastapi-demo .
+docker compose build
 ```
 ### 3. Run the container
 ```bash
-docker run -p 8000:8000 fastapi-demo
+docker compose up
 ```
 ### 4. Access the API
 Visit: http://localhost:8000/docs

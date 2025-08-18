@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from .routers import users
+from .routers import users, videos
 from .database import engine, Base
 import time
 from contextlib import asynccontextmanager
@@ -42,6 +42,7 @@ app = FastAPI(
 
 # Include routers
 app.include_router(users.router, prefix="/users", tags=["users"])
+app.include_router(videos.router, prefix="/videos", tags=["videos"])
 
 # Root endpoint
 @app.get("/")
