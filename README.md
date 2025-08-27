@@ -1,222 +1,88 @@
-# User Management API
+# DemoFastAPI (Dockerized: backend + worker + redis + postgres)
 
-A FastAPI application for managing users with PostgreSQL database and full CRUD operations.
+A FastAPI backend with a Celery worker for background processing. The entire stack runs in Docker using docker-compose.
 
-## Features
+- backend: FastAPI API server (uvicorn)
+- worker: Celery worker for transcription + embeddings
+- redis: broker/result backend for Celery
+- db: PostgreSQL database
 
-- **FastAPI**: Modern, fast web framework for building APIs
-- **PostgreSQL**: Robust relational database
-- **SQLAlchemy**: Python SQL toolkit and ORM
-- **Pydantic**: Data validation using Python type annotations
-- **Docker**: Containerized application with Docker Compose
-- **Full CRUD Operations**: Create, Read, Update, Delete users
+Uploads and artifacts are stored in the container at `/app/media`. Both backend and worker share the same volume, so they can read and write the same files.
 
-## Project Structure
+## Project structure (high level)
 
 ```
 DemoFirstBackend/
-├── backend/                 # FastAPI backend application
+├── backend/
 │   ├── app/
 │   │   ├── __init__.py
-│   │   ├── main.py         # FastAPI app entry point
-│   │   ├── database.py     # Database configuration
-│   │   ├── models.py       # SQLAlchemy models
-│   │   ├── schemas.py      # Pydantic schemas
+│   │   ├── main.py          # FastAPI app + routers
+│   │   ├── database.py      # SQLAlchemy engine/session
+│   │   ├── models.py        # ORM (User, Video, Transcript)
+│   │   ├── schemas.py       # Pydantic models
+│   │   ├── celery.py        # Celery app config
+│   │   ├── tasks.py         # Celery tasks (transcription + FAISS)
 │   │   └── routers/
-│   │       ├── __init__.py
-│   │       └── users.py    # User CRUD routes
-│   ├── requirements.txt    # Python dependencies
-│   └── Dockerfile         # Backend Docker configuration
-├── docker compose.yml    # Docker Compose configuration
-├── .env.example           # Environment variables example
-├── .gitignore           # Git ignore rules
-└── README.md           # This file
+│   │       ├── users.py
+│   │       └── videos.py    # upload/search/delete endpoints
+│   ├── requirements.txt
+│   └── Dockerfile
+├── docker-compose.yml
+├── .env.example
+├── .env
+└── README.md
 ```
 
-## Quick Start
-
-### Using Docker Compose (Recommended)
-
-1. Clone the repository
-2. Navigate to the project directory
-3. Run the application:
+## Build and run (Docker Compose)
 
 ```bash
+# Build images and start all services
 docker compose up --build
 ```
 
-The API will be available at:
-- **API Documentation**: http://localhost:8000/docs
-- **Alternative Documentation**: http://localhost:8000/redoc
-- **API Root**: http://localhost:8000/
+This starts: postgres (db), redis, backend (FastAPI), and worker (Celery).
 
-### Local Development
+- API Docs (Swagger): http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 
-1. Create a virtual environment:
+Stop all services:
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+docker compose down
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+## What each service does
 
-3. Start PostgreSQL database (using Docker):
-```bash
-docker run --name postgres-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=userdb -p 5432:5432 -d postgres:15
-```
+- backend
+  - Hosts the FastAPI API
+  - Saves uploaded videos to `/app/media/videos`
+  - Enqueues background jobs (transcribe + embeddings) to Celery via Redis
 
-4. Run the application:
-```bash
-uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
-```
+- worker
+  - Consumes Celery tasks from Redis
+  - Uses ffmpeg to extract audio from uploaded videos
+  - Uses Whisper to transcribe audio to text
+  - Splits transcript into segments, embeds with Sentence-Transformers, and indexes in FAISS
+  - Persists transcripts and FAISS files under `/app/media`
 
-## API Endpoints
+- shared media
+  - Both backend and worker mount the project `backend/` folder to `/app`
+  - All media artifacts live under `/app/media` so both can access them
 
-### Users
+## APIs (quick reference)
 
-- **GET** `/users/` - Get all users (with pagination)
-- **POST** `/users/` - Create a new user
-- **GET** `/users/{user_id}` - Get a specific user by ID
-- **PUT** `/users/{user_id}` - Update a user
-- **DELETE** `/users/{user_id}` - Delete a user
+- GET `/` – root info
+- GET `/health` – health check
+- Users CRUD under `/users`
+- Videos
+  - POST `/videos/upload` – upload a file and enqueue a processing task
+    - Response: `{ "task_id": "...", "status": "processing", "video_id": <id> }`
+  - GET `/videos/tasks/{task_id}` – check Celery task status and results
+  - GET `/videos/search?q=...` – semantic search over transcripts (FAISS)
+  - Standard CRUD: `/videos/`, `/videos/{id}` (get, put, delete)
 
-### Other
+Swagger UI: http://localhost:8000/docs
 
-- **GET** `/` - Root endpoint
-- **GET** `/health` - Health check endpoint
+## Notes
 
-## API Usage Examples
-
-### Create a User
-
-```bash
-curl -X POST "http://localhost:8000/users/" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "John Doe",
-       "email": "john.doe@example.com"
-     }'
-```
-
-### Get All Users
-
-```bash
-curl -X GET "http://localhost:8000/users/"
-```
-
-### Get a Specific User
-
-```bash
-curl -X GET "http://localhost:8000/users/1"
-```
-
-### Update a User
-
-```bash
-curl -X PUT "http://localhost:8000/users/1" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "John Smith",
-       "email": "john.smith@example.com"
-     }'
-```
-
-### Delete a User
-
-```bash
-curl -X DELETE "http://localhost:8000/users/1"
-```
-
-## Database Schema
-
-### Users Table
-
-| Column     | Type      | Constraints           |
-|------------|-----------|----------------------|
-| id         | Integer   | Primary Key, Auto-increment |
-| name       | String(100) | Not Null           |
-| email      | String(100) | Unique, Not Null, Indexed |
-| created_at | DateTime  | Auto-generated       |
-| updated_at | DateTime  | Auto-updated         |
-
-## Environment Variables
-
-- `DATABASE_URL`: PostgreSQL connection string
-- `POSTGRES_USER`: Database username
-- `POSTGRES_PASSWORD`: Database password
-- `POSTGRES_DB`: Database name
-
-## Development
-
-### Database Migrations
-
-This project uses SQLAlchemy's `create_all()` method for simplicity. For production, consider using Alembic for database migrations.
-
-## Production Deployment
-
-1. Update environment variables for production
-2. Use a production-grade PostgreSQL instance
-3. Consider using a reverse proxy (nginx)
-4. Set up proper logging and monitoring
-5. Use Docker secrets for sensitive data
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-# FastAPI User Management API
-
-This is a simple backend system built with **FastAPI**, providing full **CRUD** functionality for user management. It is fully containerized using **Docker**.
-
-## 🚀 Features
-
-- Create / Read / Update / Delete users
-- SQLAlchemy ORM
-- Pydantic-based validation
-- Swagger UI for interactive testing
-- Dockerized with Gunicorn + Uvicorn worker
-
-## 📦 Requirements
-
-- Python 3.9+
-- Docker
-
-## 🛠️ How to Run
-### 1. Clone the repo
-```bash
-git clone https://github.com/quangducnguyen1205/DemoFastAPI
-cd DemoFastAPI
-```
-### 2. Build the Docker image
-```bash
-docker compose build
-```
-### 3. Run the container
-```bash
-docker compose up
-```
-### 4. Access the API
-Visit: http://localhost:8000/docs
-
-## 📂 Project Structure
-```bash
-.
-├── main.py
-├── models.py
-├── schemas.py
-├── database.py
-├── requirements.txt
-└── Dockerfile
-```
-
-## 📬 Author
-
-Nguyễn Quang Đức – duc010205@gmail.com  
-Student at Hanoi University of Science and Technology
+- First run may download ML models (Whisper and Sentence-Transformers), which can take a while.
+- Consider Alembic for DB migrations if evolving schema in production.

@@ -1,8 +1,18 @@
 from fastapi import FastAPI
-from .routers import users, videos
-from .database import engine, Base
+try:
+    from dotenv import load_dotenv  # type: ignore
+except Exception:  # fallback if python-dotenv isn't installed in local editor
+    def load_dotenv(*args, **kwargs):  # type: ignore
+        return False
+import os
 import time
 from contextlib import asynccontextmanager
+
+# Load environment variables from .env as early as possible
+load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
+
+from .routers import users, videos
+from .database import engine, Base
 
 # Create database tables
 def create_tables():

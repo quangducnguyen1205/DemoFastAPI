@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     libffi-dev \
     libpq-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -22,6 +23,7 @@ WORKDIR /app
 
 # Install pip requirements
 COPY requirements.txt .
+RUN python -m pip install --upgrade pip
 RUN python -m pip install -r requirements.txt
 
 # Copy application code

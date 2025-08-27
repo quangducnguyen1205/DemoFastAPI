@@ -49,6 +49,36 @@ class VideoUploadResponse(BaseModel):
     path: str
     owner_id: Optional[int] = None
     created_at: datetime
+    transcript_segments: list[str] = []
+
+    class Config:
+        from_attributes = True
+
+
+class VideoSearchResult(BaseModel):
+    video_id: int
+    title: str
+    path: Optional[str] = None
+    similarity_score: float
+
+    class Config:
+        from_attributes = True
+
+
+# -------------------- Transcript Schemas --------------------
+class TranscriptBase(BaseModel):
+    text: str
+
+
+class TranscriptCreate(TranscriptBase):
+    video_id: int
+
+
+class TranscriptRead(TranscriptBase):
+    id: int
+    video_id: int
+    segment_index: int
+    created_at: datetime
 
     class Config:
         from_attributes = True

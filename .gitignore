@@ -129,3 +129,23 @@ Thumbs.db
 
 # Docker
 .dockerignore
+
+# Media and generated artifacts
+media/
+backend/app/media/
+*.wav
+*.mp3
+*.mp4
+*.m4a
+*.webm
+*.avi
+*.mkv
+*.flac
+*.aac
+*.ogg
+*.mov
+*.tmp
+tmp/
+*.faiss
+*.pkl
+*.pickle

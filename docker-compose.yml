@@ -6,10 +6,20 @@ services:
       - "8000:8000"
     depends_on:
       - db
+      - redis
     environment:
-      - DATABASE_URL=${DATABASE_URL} # Ensure this is set in your .env file
+      DATABASE_URL: ${DATABASE_URL}
+      MEDIA_ROOT: ${MEDIA_ROOT:-media}
+      FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-}
+      FAISS_MAPPING_PATH: ${FAISS_MAPPING_PATH:-}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    env_file:
+      - .env
     volumes:
       - ./backend:/app
+      - ./backend/app/media:/app/media
+
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   db:
@@ -22,6 +32,30 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  worker:
+    build: ./backend
+    depends_on:
+      - db
+      - redis
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/userdb
+      MEDIA_ROOT: /app/media
+      FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-}
+      FAISS_MAPPING_PATH: ${FAISS_MAPPING_PATH:-}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - ./backend/app/media:/app/media
+    command: celery -A app.celery.celery_app worker --loglevel=info
 
   adminer:
     image: adminer

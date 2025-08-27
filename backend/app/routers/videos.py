@@ -2,21 +2,128 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import os
 import uuid
 import logging
+import subprocess
+import tempfile
+import whisper
+
+from pathlib import Path
 from sqlalchemy.orm import Session
 from typing import List
 
 from ..database import get_db
 from .. import models, schemas
+from ..tasks import process_video_task
 
 router = APIRouter()
 
-MEDIA_ROOT = os.getenv("MEDIA_ROOT", "media")
+MEDIA_ROOT = os.getenv("MEDIA_ROOT") or "media"
 VIDEO_SUBDIR = "videos"
 VIDEO_DIR = os.path.join(MEDIA_ROOT, VIDEO_SUBDIR)
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
+
+def split_transcript_text(text: str, max_len: int = 200) -> List[str]:
+    """Split text into sentence-like chunks and group to <= max_len characters.
+
+    Strategy: split on '.', '!', '?' keeping the delimiter, then aggregate
+    consecutive sentences into chunks not exceeding max_len, trimming whitespace.
+    Fallback: if a single sentence exceeds max_len, hard-wrap it.
+    """
+    if not text:
+        return []
+    import re
+    # Split while keeping delimiters
+    parts = re.split(r"([.!?])", text)
+    sentences: List[str] = []
+    for i in range(0, len(parts), 2):
+        sent = parts[i].strip()
+        if not sent:
+            continue
+        delim = parts[i + 1] if i + 1 < len(parts) else ""
+        sentences.append((sent + delim).strip())
+
+    chunks: List[str] = []
+    current = ""
+    for s in sentences:
+        if not current:
+            current = s
+        elif len(current) + 1 + len(s) <= max_len:
+            current = f"{current} {s}"
+        else:
+            chunks.append(current)
+            current = s
+    if current:
+        chunks.append(current)
+
+    # Hard-wrap outliers longer than max_len
+    wrapped: List[str] = []
+    for ch in chunks:
+        if len(ch) <= max_len:
+            wrapped.append(ch)
+        else:
+            for i in range(0, len(ch), max_len):
+                wrapped.append(ch[i:i+max_len])
+    return wrapped
+
+
+@router.get("/search", response_model=List[schemas.VideoSearchResult])
+def search_videos(q: str, k: int = 5, db: Session = Depends(get_db)):
+    """Semantic search over video transcripts using FAISS embeddings.
+
+    Args:
+        q: Query string to search for semantically.
+        k: Number of results to return (default 5).
+    Returns: List of VideoSearchResult with similarity scores (higher = closer).
+    """
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
+    try:
+        # Generate query embedding
+        query_vec = models.generate_embedding(q)
+        import numpy as np, faiss  # type: ignore
+        vec = query_vec.astype('float32') if hasattr(query_vec, 'astype') else np.array(query_vec, dtype='float32')
+        dim = vec.shape[0]
+        # Load index & mapping
+        index = models.load_faiss_index(dim)
+        mapping = models.load_faiss_mapping()
+        if index.ntotal == 0 or not mapping:
+            return []
+        # Perform search
+        D, I = index.search(vec.reshape(1, -1), min(k, index.ntotal))
+        distances = D[0]
+        indices = I[0]
+        results: List[schemas.VideoSearchResult] = []
+        for faiss_id, dist in zip(indices, distances):
+            if faiss_id == -1:
+                continue
+            video_id = mapping.get(faiss_id)
+            if not video_id:
+                continue
+            video = db.query(models.Video).filter(models.Video.id == video_id).first()
+            if not video:
+                continue
+            # Convert L2 distance to similarity (simple transformation). Avoid division by zero.
+            # similarity = 1 / (1 + distance). If distance is 0, similarity = 1.
+            similarity = 1.0 / (1.0 + float(dist)) if dist >= 0 else 0.0
+            results.append(
+                schemas.VideoSearchResult(
+                    video_id=video.id,
+                    title=video.title,
+                    path=video.path or video.url,
+                    similarity_score=similarity,
+                )
+            )
+        # Sort by similarity descending (in case FAISS returns unsorted for some reason)
+        results.sort(key=lambda r: r.similarity_score, reverse=True)
+        return results
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.warning(f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail="Search failed")
+
 # Upload video file
-@router.post("/upload", response_model=schemas.VideoUploadResponse)
+@router.post("/upload")
 def upload_video(
     file: UploadFile = File(...),
     title: str = Form(...),
@@ -39,11 +146,28 @@ def upload_video(
         url=rel_path,   # keeping url for backward compatibility
         path=rel_path,
         owner_id=owner_id,
+        status="processing",
     )
     db.add(db_video)
     db.commit()
     db.refresh(db_video)
-    return db_video
+
+    # Enqueue background processing task
+    abs_video_path = os.path.abspath(save_path)
+    async_result = process_video_task.delay(db_video.id, abs_video_path)
+
+    return {"task_id": async_result.id, "status": "processing", "video_id": db_video.id}
+
+@router.get("/tasks/{task_id}")
+def get_task_status(task_id: str):
+    res = process_video_task.AsyncResult(task_id)
+    state = res.state
+    payload = {"status": state}
+    if state == "SUCCESS":
+        payload["result"] = res.result
+    elif state == "FAILURE":
+        payload["error"] = str(res.result)
+    return payload
 
 # Create video
 @router.post("/", response_model=schemas.VideoRead)
