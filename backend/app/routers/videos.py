@@ -2,71 +2,28 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import os
 import uuid
 import logging
-import subprocess
-import tempfile
-import whisper
 
 from pathlib import Path
 from sqlalchemy.orm import Session
 from typing import List
 
-from ..database import get_db
-from .. import models, schemas
-from ..tasks import process_video_task
+from ..core.database import get_db
+from .. import models
+from ..schemas import VideoSearchResult, VideoCreate, VideoRead
+from ..tasks.video_tasks import process_video_task
+from ..config.settings import settings
 
 router = APIRouter()
 
-MEDIA_ROOT = os.getenv("MEDIA_ROOT") or "media"
-VIDEO_SUBDIR = "videos"
-VIDEO_DIR = os.path.join(MEDIA_ROOT, VIDEO_SUBDIR)
+MEDIA_ROOT = settings.MEDIA_ROOT
+VIDEO_DIR = settings.VIDEO_DIR
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
 
-def split_transcript_text(text: str, max_len: int = 200) -> List[str]:
-    """Split text into sentence-like chunks and group to <= max_len characters.
-
-    Strategy: split on '.', '!', '?' keeping the delimiter, then aggregate
-    consecutive sentences into chunks not exceeding max_len, trimming whitespace.
-    Fallback: if a single sentence exceeds max_len, hard-wrap it.
-    """
-    if not text:
-        return []
-    import re
-    # Split while keeping delimiters
-    parts = re.split(r"([.!?])", text)
-    sentences: List[str] = []
-    for i in range(0, len(parts), 2):
-        sent = parts[i].strip()
-        if not sent:
-            continue
-        delim = parts[i + 1] if i + 1 < len(parts) else ""
-        sentences.append((sent + delim).strip())
-
-    chunks: List[str] = []
-    current = ""
-    for s in sentences:
-        if not current:
-            current = s
-        elif len(current) + 1 + len(s) <= max_len:
-            current = f"{current} {s}"
-        else:
-            chunks.append(current)
-            current = s
-    if current:
-        chunks.append(current)
-
-    # Hard-wrap outliers longer than max_len
-    wrapped: List[str] = []
-    for ch in chunks:
-        if len(ch) <= max_len:
-            wrapped.append(ch)
-        else:
-            for i in range(0, len(ch), max_len):
-                wrapped.append(ch[i:i+max_len])
-    return wrapped
+## split_transcript_text moved to app/utils.py and imported above
 
 
-@router.get("/search", response_model=List[schemas.VideoSearchResult])
+@router.get("/search", response_model=List[VideoSearchResult])
 def search_videos(q: str, k: int = 5, db: Session = Depends(get_db)):
     """Semantic search over video transcripts using FAISS embeddings.
 
@@ -88,34 +45,42 @@ def search_videos(q: str, k: int = 5, db: Session = Depends(get_db)):
         mapping = models.load_faiss_mapping()
         if index.ntotal == 0 or not mapping:
             return []
-        # Perform search
-        D, I = index.search(vec.reshape(1, -1), min(k, index.ntotal))
+        # Perform search across entire index. To get good coverage per video,
+        # ask for up to N results where N is the total vectors in the index.
+        # We'll then group by video_id and keep only the max similarity per video.
+        nprobe = min(max(50, k * 10), index.ntotal)  # heuristic
+        D, I = index.search(vec.reshape(1, -1), nprobe)
         distances = D[0]
         indices = I[0]
-        results: List[schemas.VideoSearchResult] = []
+
+        best_by_video: dict[int, float] = {}
         for faiss_id, dist in zip(indices, distances):
             if faiss_id == -1:
                 continue
-            video_id = mapping.get(faiss_id)
-            if not video_id:
+            vid = mapping.get(faiss_id)
+            if not vid:
                 continue
-            video = db.query(models.Video).filter(models.Video.id == video_id).first()
+            # Convert L2 distance to similarity
+            similarity = 1.0 / (1.0 + float(dist)) if dist >= 0 else 0.0
+            if vid not in best_by_video or similarity > best_by_video[vid]:
+                best_by_video[vid] = similarity
+
+        # Build response objects (one per video) and sort by similarity desc
+        results: List[VideoSearchResult] = []
+        for vid, sim in best_by_video.items():
+            video = db.query(models.Video).filter(models.Video.id == vid).first()
             if not video:
                 continue
-            # Convert L2 distance to similarity (simple transformation). Avoid division by zero.
-            # similarity = 1 / (1 + distance). If distance is 0, similarity = 1.
-            similarity = 1.0 / (1.0 + float(dist)) if dist >= 0 else 0.0
             results.append(
-                schemas.VideoSearchResult(
+                VideoSearchResult(
                     video_id=video.id,
                     title=video.title,
                     path=video.path or video.url,
-                    similarity_score=similarity,
+                    similarity_score=sim,
                 )
             )
-        # Sort by similarity descending (in case FAISS returns unsorted for some reason)
         results.sort(key=lambda r: r.similarity_score, reverse=True)
-        return results
+        return results[:k]
     except HTTPException:
         raise
     except Exception as e:
@@ -139,7 +104,8 @@ def upload_video(
     with open(save_path, "wb") as out_file:
         out_file.write(file.file.read())
 
-    rel_path = os.path.join(VIDEO_SUBDIR, unique_name)
+    # Store relative path under media root (e.g., "videos/<file>")
+    rel_path = os.path.join(os.path.basename(settings.VIDEO_SUBDIR), unique_name) if hasattr(settings, 'VIDEO_SUBDIR') else os.path.join("videos", unique_name)
 
     db_video = models.Video(
         title=title,
@@ -170,8 +136,8 @@ def get_task_status(task_id: str):
     return payload
 
 # Create video
-@router.post("/", response_model=schemas.VideoRead)
-def create_video(video: schemas.VideoCreate, db: Session = Depends(get_db)):
+@router.post("/", response_model=VideoRead)
+def create_video(video: VideoCreate, db: Session = Depends(get_db)):
     db_video = models.Video(title=video.title, description=video.description, url=video.url)
     db.add(db_video)
     db.commit()
@@ -179,13 +145,13 @@ def create_video(video: schemas.VideoCreate, db: Session = Depends(get_db)):
     return db_video
 
 # List videos
-@router.get("/", response_model=List[schemas.VideoRead])
+@router.get("/", response_model=List[VideoRead])
 def list_videos(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     videos = db.query(models.Video).offset(skip).limit(limit).all()
     return videos
 
 # Get single video
-@router.get("/{video_id}", response_model=schemas.VideoRead)
+@router.get("/{video_id}", response_model=VideoRead)
 def get_video(video_id: int, db: Session = Depends(get_db)):
     video = db.query(models.Video).filter(models.Video.id == video_id).first()
     if video is None:
@@ -193,8 +159,8 @@ def get_video(video_id: int, db: Session = Depends(get_db)):
     return video
 
 # Update video (full update)
-@router.put("/{video_id}", response_model=schemas.VideoRead)
-def update_video(video_id: int, video_in: schemas.VideoCreate, db: Session = Depends(get_db)):
+@router.put("/{video_id}", response_model=VideoRead)
+def update_video(video_id: int, video_in: VideoCreate, db: Session = Depends(get_db)):
     video = db.query(models.Video).filter(models.Video.id == video_id).first()
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")

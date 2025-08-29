@@ -22,7 +22,7 @@ celery_app = Celery(
     "backend_tasks",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=["app.tasks"],
+    include=["app.tasks", "app.tasks.video_tasks"],
 )
 
 # Reasonable defaults

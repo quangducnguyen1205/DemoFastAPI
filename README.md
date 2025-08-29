@@ -18,13 +18,31 @@ DemoFirstBackend/
 │   │   ├── __init__.py
 │   │   ├── main.py          # FastAPI app + routers
 │   │   ├── database.py      # SQLAlchemy engine/session
-│   │   ├── models.py        # ORM (User, Video, Transcript)
-│   │   ├── schemas.py       # Pydantic models
+│   │   ├── models.py        # ORM (User, Video, Transcript) — consider splitting into app/models/
+│   │   ├── schemas.py       # Pydantic models — consider splitting into app/schemas/
 │   │   ├── celery.py        # Celery app config
-│   │   ├── tasks.py         # Celery tasks (transcription + FAISS)
+│   │   ├── tasks.py         # Celery tasks (transcription + FAISS) — consider app/tasks/
 │   │   └── routers/
 │   │       ├── users.py
 │   │       └── videos.py    # upload/search/delete endpoints
+│   │   ├── utils.py         # shared helpers (e.g., transcript splitting)
+│   │   ├── config/
+│   │   │   └── settings.py  # centralized env + path config
+### Suggested scalable layout (future refactor)
+
+```
+app/
+  core/               # app-wide init: database, celery, logging, exceptions
+  config/             # settings.py (Pydantic BaseSettings or similar)
+  models/             # user.py, video.py, transcript.py
+  schemas/            # user.py, video.py, transcript.py
+  services/           # video_processing.py, transcripts.py, search.py
+  tasks/              # celery tasks grouped by domain
+  routers/            # users.py, videos.py, tasks.py (status)
+  utils/              # small helpers
+```
+
+Benefits: clearer ownership, easier testing, smaller modules, simpler imports, and better scalability when adding domains.
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── docker-compose.yml

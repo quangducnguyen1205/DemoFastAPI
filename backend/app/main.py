@@ -12,7 +12,9 @@ from contextlib import asynccontextmanager
 load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
 
 from .routers import users, videos
-from .database import engine, Base
+from .core.database import engine, Base
+# Ensure models are imported so SQLAlchemy registers tables
+from . import models as _models  # noqa: F401
 
 # Create database tables
 def create_tables():
