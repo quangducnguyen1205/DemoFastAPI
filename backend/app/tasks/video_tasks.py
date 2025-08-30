@@ -1,8 +1,8 @@
 import logging
 from sqlalchemy.orm import Session
 
-from ..core.database import SessionLocal
-from ..core.celery_app import celery_app
+from app.core.database import SessionLocal
+from app.core.celery_app import celery_app
 from .. import models
 from ..services.video_processing import (
     extract_audio_to_wav,

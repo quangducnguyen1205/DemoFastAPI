@@ -28,8 +28,8 @@ class Settings:
     DATABASE_URL: str = _env("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/userdb")  # local fallback
 
     # Media configuration
-    # If running in docker, default to /app/media; else default to ./backend/media for convenience
-    MEDIA_ROOT: str = _env("MEDIA_ROOT", "/app/media" if _is_docker() else "backend/media")
+    # If running in docker, default to /app/media; else default to ./media for local runs
+    MEDIA_ROOT: str = _env("MEDIA_ROOT", "/app/media" if _is_docker() else "media")
     VIDEO_SUBDIR: str = _env("VIDEO_SUBDIR", "videos")
 
     # FAISS files

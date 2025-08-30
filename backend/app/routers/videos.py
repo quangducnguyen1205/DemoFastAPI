@@ -9,6 +9,7 @@ from typing import List
 
 from ..core.database import get_db
 from .. import models
+from ..services import semantic_index
 from ..schemas import VideoSearchResult, VideoCreate, VideoRead
 from ..tasks.video_tasks import process_video_task
 from ..config.settings import settings
@@ -36,18 +37,16 @@ def search_videos(q: str, k: int = 5, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
     try:
         # Generate query embedding
-        query_vec = models.generate_embedding(q)
+        query_vec = semantic_index.generate_embedding(q)
         import numpy as np, faiss  # type: ignore
         vec = query_vec.astype('float32') if hasattr(query_vec, 'astype') else np.array(query_vec, dtype='float32')
         dim = vec.shape[0]
         # Load index & mapping
-        index = models.load_faiss_index(dim)
-        mapping = models.load_faiss_mapping()
+        index = semantic_index.load_faiss_index(dim)
+        mapping = semantic_index.load_faiss_mapping()
         if index.ntotal == 0 or not mapping:
             return []
-        # Perform search across entire index. To get good coverage per video,
-        # ask for up to N results where N is the total vectors in the index.
-        # We'll then group by video_id and keep only the max similarity per video.
+        # Perform search across entire index, then group by video id
         nprobe = min(max(50, k * 10), index.ntotal)  # heuristic
         D, I = index.search(vec.reshape(1, -1), nprobe)
         distances = D[0]

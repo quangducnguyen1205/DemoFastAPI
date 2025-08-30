@@ -20,8 +20,9 @@ DemoFirstBackend/
 │   │   ├── database.py      # SQLAlchemy engine/session
 │   │   ├── models.py        # ORM (User, Video, Transcript) — consider splitting into app/models/
 │   │   ├── schemas.py       # Pydantic models — consider splitting into app/schemas/
-│   │   ├── celery.py        # Celery app config
-│   │   ├── tasks.py         # Celery tasks (transcription + FAISS) — consider app/tasks/
+│   │   ├── core/
+│   │   │   └── celery_app.py  # Celery app (single source of truth)
+│   │   ├── tasks/           # Celery tasks (transcription + FAISS)
 │   │   └── routers/
 │   │       ├── users.py
 │   │       └── videos.py    # upload/search/delete endpoints
@@ -58,7 +59,7 @@ Benefits: clearer ownership, easier testing, smaller modules, simpler imports, a
 docker compose up --build
 ```
 
-This starts: postgres (db), redis, backend (FastAPI), and worker (Celery).
+This starts: postgres (db), redis, backend (FastAPI), and worker (Celery via `app.core.celery_app`).
 
 - API Docs (Swagger): http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
@@ -84,7 +85,7 @@ docker compose down
 
 - shared media
   - Both backend and worker mount the project `backend/` folder to `/app`
-  - All media artifacts live under `/app/media` so both can access them
+  - All media artifacts live under `/app/media` in Docker. Locally, paths default to `./media`.
 
 ## APIs (quick reference)
 

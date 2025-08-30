@@ -55,7 +55,7 @@ services:
     volumes:
       - ./backend:/app
       - ./backend/app/media:/app/media
-  command: celery -A app.core.celery_app worker --loglevel=info
+    command: celery -A app.core.celery_app worker --loglevel=info
 
   adminer:
     image: adminer
