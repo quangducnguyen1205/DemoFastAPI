@@ -1,107 +1,95 @@
-# DemoFastAPI (Dockerized: backend + worker + redis + postgres)
+## DemoFastAPI
 
-A FastAPI backend with a Celery worker for background processing. The entire stack runs in Docker using docker-compose.
+### 1. Overview
+FastAPI backend integrating PostgreSQL, Redis, Celery, Whisper transcription, sentence-transformer embeddings, and FAISS for semantic search. Video uploads trigger asynchronous processing (audio extraction → transcription → segmentation → embedding → FAISS index update). A lightweight in-memory stack (SQLite + in‑memory Celery) powers the dedicated test service.
 
-- backend: FastAPI API server (uvicorn)
-- worker: Celery worker for transcription + embeddings
-- redis: broker/result backend for Celery
-- db: PostgreSQL database
+### 2. Features
+- User management (CRUD)
+- Video upload endpoint with background Celery task
+- FFMPEG audio extraction
+- Whisper transcription (worker only; mocked in tests)
+- Transcript segmentation + persistence
+- Embedding generation (sentence-transformers) + FAISS index storage
+- Semantic search endpoint grouping results per video
+- Task status polling (`/videos/tasks/{task_id}`)
 
-Uploads and artifacts are stored in the container at `/app/media`. Both backend and worker share the same volume, so they can read and write the same files.
+### 3. Architecture / Services
+| Service | Purpose |
+|---------|---------|
+| backend | FastAPI app (REST + search + enqueue tasks) |
+| worker  | Celery worker (transcoding, transcription, embeddings, FAISS) |
+| db      | PostgreSQL (runtime persistence) |
+| redis   | Celery broker/result backend (prod/dev) |
+| test    | Ephemeral test runner (SQLite + memory broker) |
 
-## Project structure (high level)
+Media + FAISS artifacts live under `backend/app/media` (mounted into both backend & worker). Test service uses an isolated path inside its container.
 
+### 4. Project Layout (key parts)
 ```
-DemoFirstBackend/
-├── backend/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py          # FastAPI app + routers
-│   │   ├── database.py      # SQLAlchemy engine/session
-│   │   ├── models.py        # ORM (User, Video, Transcript) — consider splitting into app/models/
-│   │   ├── schemas.py       # Pydantic models — consider splitting into app/schemas/
-│   │   ├── core/
-│   │   │   └── celery_app.py  # Celery app (single source of truth)
-│   │   ├── tasks/           # Celery tasks (transcription + FAISS)
-│   │   └── routers/
-│   │       ├── users.py
-│   │       └── videos.py    # upload/search/delete endpoints
-│   │   ├── utils.py         # shared helpers (e.g., transcript splitting)
-│   │   ├── config/
-│   │   │   └── settings.py  # centralized env + path config
-### Suggested scalable layout (future refactor)
-
-```
-app/
-  core/               # app-wide init: database, celery, logging, exceptions
-  config/             # settings.py (Pydantic BaseSettings or similar)
-  models/             # user.py, video.py, transcript.py
-  schemas/            # user.py, video.py, transcript.py
-  services/           # video_processing.py, transcripts.py, search.py
-  tasks/              # celery tasks grouped by domain
-  routers/            # users.py, videos.py, tasks.py (status)
-  utils/              # small helpers
-```
-
-Benefits: clearer ownership, easier testing, smaller modules, simpler imports, and better scalability when adding domains.
-│   ├── requirements.txt
-│   └── Dockerfile
-├── docker-compose.yml
-├── .env.example
-├── .env
-└── README.md
+backend/
+  app/
+    main.py                # FastAPI app + lifespan creates tables
+    core/
+      database.py          # Engine (handles in‑memory SQLite with StaticPool)
+      celery_app.py        # Central Celery instance
+    models/                # user.py, video.py, transcript.py
+    routers/               # users.py, videos.py
+    services/              # video_processing.py, semantic_index.py
+    tasks/                 # video_tasks.py (process_video)
+    schemas/               # Pydantic response/request models
+    config/settings.py     # Environment-driven settings
+    utils.py               # Helpers (transcript splitting, etc.)
+tests/                     # Pytest suite (see below)
 ```
 
-## Build and run (Docker Compose)
-
+### 5. Development Setup (Docker Compose)
+Create a `.env` (see `.env.example`) then:
 ```bash
-# Build images and start all services
 docker compose up --build
 ```
-
-This starts: postgres (db), redis, backend (FastAPI), and worker (Celery via `app.core.celery_app`).
-
-- API Docs (Swagger): http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
-Stop all services:
+Access:
+```
+Swagger: http://localhost:8000/docs
+ReDoc:   http://localhost:8000/redoc
+Health:  http://localhost:8000/health
+```
+Stop services:
 ```bash
 docker compose down
 ```
 
-## What each service does
+### 6. API Highlights
+- `POST /videos/upload` → returns `{task_id, status, video_id}` and immediately schedules processing.
+- `GET /videos/tasks/{task_id}` → check Celery task state.
+- `GET /videos/search?q=...` → semantic transcript search (deduplicated by video, similarity sorted).
+- Standard CRUD under `/users` and `/videos`.
 
-- backend
-  - Hosts the FastAPI API
-  - Saves uploaded videos to `/app/media/videos`
-  - Enqueues background jobs (transcribe + embeddings) to Celery via Redis
+### 7. Testing
+Dedicated `test` service runs the suite with:
+- SQLite in‑memory DB (`sqlite+pysqlite:///:memory:`) + SQLAlchemy StaticPool so tables persist across sessions
+- Celery memory broker/result backend (no Redis needed)
+- ML + FAISS heavy operations mocked in specific tests (search, upload) for speed
 
-- worker
-  - Consumes Celery tasks from Redis
-  - Uses ffmpeg to extract audio from uploaded videos
-  - Uses Whisper to transcribe audio to text
-  - Splits transcript into segments, embeds with Sentence-Transformers, and indexes in FAISS
-  - Persists transcripts and FAISS files under `/app/media`
+Run tests:
+```bash
+docker compose run --rm test
+```
+Or a single test file:
+```bash
+docker compose run --rm test pytest tests/test_users.py -q
+```
 
-- shared media
-  - Both backend and worker mount the project `backend/` folder to `/app`
-  - All media artifacts live under `/app/media` in Docker. Locally, paths default to `./media`.
+### 8. Current Test Suite
+- Smoke / health: root + `/health`
+- Users CRUD: create, read, list, update, delete
+- Video upload: mocks task dispatch, validates DB insert & response shape
+- Search tests: monkeypatch FAISS + embeddings to validate grouping & similarity ordering
+- Celery task stub: ensures task failure path or ready transition logic (uses in‑memory broker)
 
-## APIs (quick reference)
+### 9. Implementation Notes
+- `app/main.py` lifespan ensures tables are created at startup (includes model imports first).
+- `app/core/database.py` adapts engine for in‑memory SQLite (StaticPool + `check_same_thread=False`).
+- FAISS index + mapping persisted in `media/`; tests isolate by using a temporary media root path.
 
-- GET `/` – root info
-- GET `/health` – health check
-- Users CRUD under `/users`
-- Videos
-  - POST `/videos/upload` – upload a file and enqueue a processing task
-    - Response: `{ "task_id": "...", "status": "processing", "video_id": <id> }`
-  - GET `/videos/tasks/{task_id}` – check Celery task status and results
-  - GET `/videos/search?q=...` – semantic search over transcripts (FAISS)
-  - Standard CRUD: `/videos/`, `/videos/{id}` (get, put, delete)
-
-Swagger UI: http://localhost:8000/docs
-
-## Notes
-
-- First run may download ML models (Whisper and Sentence-Transformers), which can take a while.
-- Consider Alembic for DB migrations if evolving schema in production.
+---
+Concise, production‑leaning FastAPI skeleton with async processing + semantic search—ready to extend.
