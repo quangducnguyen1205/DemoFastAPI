@@ -6,9 +6,9 @@ from typing import List
 
 from sqlalchemy.orm import Session
 
-from .. import models
+from app import models
 from . import semantic_index
-from ..utils import split_transcript_text
+from app.utils import split_transcript_text
 
 
 def extract_audio_to_wav(abs_video_path: str, sample_rate: int = 16000) -> str:
@@ -26,7 +26,7 @@ def extract_audio_to_wav(abs_video_path: str, sample_rate: int = 16000) -> str:
 def transcribe_audio_with_whisper(audio_path: str) -> str | None:
     """Transcribe audio using Whisper (base model). Returns full text or None."""
     try:
-        import whisper  # heavy import; keep inside worker process
+        import whisper  # heavy import; keep inside a worker process
         model = whisper.load_model("base")
         result = model.transcribe(audio_path)
         return (result.get("text", "") or "").strip() or None
@@ -55,7 +55,7 @@ def embed_and_update_faiss(segments: List[str], video_id: int) -> None:
     vecs = np.array(embeddings, dtype="float32")
     dim = vecs.shape[1]
     index = semantic_index.load_faiss_index(dim)
-    # add vectors to index
+    # add vectors to the index
     index.add(vecs)
     semantic_index.save_faiss_index(index)
     # update mapping

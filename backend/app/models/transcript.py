@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from ..core.database import Base
+from app.core.database import Base
 
 
 class Transcript(Base):

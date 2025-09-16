@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.core.celery_app import celery_app
-from .. import models
-from ..services.video_processing import (
+from app import models
+from app.services.video_processing import (
     extract_audio_to_wav,
     transcribe_audio_with_whisper,
     segment_text,

@@ -8,6 +8,7 @@ services:
       - db
       - redis
     environment:
+      PYTHONPATH: /backend
       DATABASE_URL: ${DATABASE_URL}
       MEDIA_ROOT: ${MEDIA_ROOT:-media}
       FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-}
@@ -44,6 +45,7 @@ services:
       - db
       - redis
     environment:
+      PYTHONPATH: /backend
       DATABASE_URL: ${DATABASE_URL}
       MEDIA_ROOT: ${MEDIA_ROOT:-media}
       FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-}
@@ -60,10 +62,11 @@ services:
   test:
     build: ./backend
     environment:
+      PYTHONPATH: /backend
       DATABASE_URL: "sqlite:///./test.db"
       CELERY_BROKER_URL: "memory://"
       CELERY_RESULT_BACKEND: "cache+memory://"
-      MEDIA_ROOT: "/app/test_media"
+      MEDIA_ROOT: "/backend/test_media"
       TOKENIZERS_PARALLELISM: "false"
     # No volumes to avoid macOS FS lock issues; use image filesystem
     command: sh -c "PYTHONPATH=. pytest -v --assert=plain"

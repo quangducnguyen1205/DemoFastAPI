@@ -3,16 +3,15 @@ import os
 import uuid
 import logging
 
-from pathlib import Path
 from sqlalchemy.orm import Session
 from typing import List
 
-from ..core.database import get_db
-from .. import models
-from ..services import semantic_index
-from ..schemas import VideoSearchResult, VideoCreate, VideoRead
-from ..tasks.video_tasks import process_video_task
-from ..config.settings import settings
+from app.core.database import get_db
+from app import models
+from app.services import semantic_index
+from app.schemas import VideoSearchResult, VideoCreate, VideoRead
+from app.tasks.video_tasks import process_video_task
+from app.config.settings import settings
 
 router = APIRouter()
 
@@ -38,17 +37,24 @@ def search_videos(q: str, k: int = 5, db: Session = Depends(get_db)):
     try:
         # Generate query embedding
         query_vec = semantic_index.generate_embedding(q)
-        import numpy as np, faiss  # type: ignore
+        import numpy as np  # type: ignore
         vec = query_vec.astype('float32') if hasattr(query_vec, 'astype') else np.array(query_vec, dtype='float32')
-        dim = vec.shape[0]
+        dim = int(vec.shape[0])
+
         # Load index & mapping
         index = semantic_index.load_faiss_index(dim)
         mapping = semantic_index.load_faiss_mapping()
-        if index.ntotal == 0 or not mapping:
+        if getattr(index, "ntotal", 0) == 0 or not mapping:
             return []
-        # Perform search across entire index, then group by video id
-        nprobe = min(max(50, k * 10), index.ntotal)  # heuristic
-        D, I = index.search(vec.reshape(1, -1), nprobe)
+
+        # Optionally configure IVF search breadth if supported
+        if hasattr(index, "nprobe"):
+            # Heuristic breadth; adjust as needed for recall/latency
+            index.nprobe = max(8, min(64, k * 4))
+
+        # Search more segments than requested videos to allow grouping
+        topk_segments = min(max(k * 4, 50), index.ntotal)
+        D, I = index.search(vec.reshape(1, -1), topk_segments)
         distances = D[0]
         indices = I[0]
 
@@ -56,29 +62,31 @@ def search_videos(q: str, k: int = 5, db: Session = Depends(get_db)):
         for faiss_id, dist in zip(indices, distances):
             if faiss_id == -1:
                 continue
-            vid = mapping.get(faiss_id)
-            if not vid:
+            vid = mapping.get(int(faiss_id))
+            if vid is None:
                 continue
-            # Convert L2 distance to similarity
+            # Convert L2 distance to a bounded similarity score
             similarity = 1.0 / (1.0 + float(dist)) if dist >= 0 else 0.0
             if vid not in best_by_video or similarity > best_by_video[vid]:
                 best_by_video[vid] = similarity
 
         # Build response objects (one per video) and sort by similarity desc
         results: List[VideoSearchResult] = []
-        for vid, sim in best_by_video.items():
-            video = db.query(models.Video).filter(models.Video.id == vid).first()
-            if not video:
-                continue
-            results.append(
-                VideoSearchResult(
-                    video_id=video.id,
-                    title=video.title,
-                    path=video.path or video.url,
-                    similarity_score=sim,
+        if best_by_video:
+            # Fetch videos individually; could be optimized to a single IN query if desired
+            for vid, sim in best_by_video.items():
+                video = db.query(models.Video).filter(models.Video.id == vid).first()
+                if not video:
+                    continue
+                results.append(
+                    VideoSearchResult(
+                        video_id=video.id,
+                        title=video.title,
+                        path=getattr(video, "path", None) or getattr(video, "url", None),
+                        similarity_score=sim,
+                    )
                 )
-            )
-        results.sort(key=lambda r: r.similarity_score, reverse=True)
+            results.sort(key=lambda r: r.similarity_score, reverse=True)
         return results[:k]
     except HTTPException:
         raise
@@ -99,11 +107,11 @@ def upload_video(
     unique_name = f"{uuid.uuid4().hex}{original_ext}"
     save_path = os.path.join(VIDEO_DIR, unique_name)
 
-    # Persist file to disk
+    # Persist a file to disk
     with open(save_path, "wb") as out_file:
         out_file.write(file.file.read())
 
-    # Store relative path under media root (e.g., "videos/<file>")
+    # Store relative path under the media root (e.g., "videos/<file>")
     rel_path = os.path.join(os.path.basename(settings.VIDEO_SUBDIR), unique_name) if hasattr(settings, 'VIDEO_SUBDIR') else os.path.join("videos", unique_name)
 
     db_video = models.Video(
@@ -149,7 +157,7 @@ def list_videos(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     videos = db.query(models.Video).offset(skip).limit(limit).all()
     return videos
 
-# Get single video
+# Get a single video
 @router.get("/{video_id}", response_model=VideoRead)
 def get_video(video_id: int, db: Session = Depends(get_db)):
     video = db.query(models.Video).filter(models.Video.id == video_id).first()
@@ -177,9 +185,9 @@ def delete_video(video_id: int, db: Session = Depends(get_db)):
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Attempt to remove associated file if path present
+    # Attempt to remove an associated file if a path present
     if getattr(video, "path", None):
-        # Build absolute path inside expected directory
+        # Build absolute path inside the expected directory
         candidate_path = os.path.join(MEDIA_ROOT, video.path) if not os.path.isabs(video.path) else video.path
         try:
             abs_candidate = os.path.abspath(candidate_path)

@@ -20,7 +20,7 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
 
 def _is_docker() -> bool:
     # Heuristic: docker sets this file
-    return Path("/.dockerenv").exists() or _env("DOCKERIZED", "false").lower() in {"1", "true", "yes"}
+    return Path("/.docker").exists() or _env("DOCKERIZED", "false").lower() in {"1", "true", "yes"}
 
 
 class Settings:
@@ -29,7 +29,7 @@ class Settings:
 
     # Media configuration
     # If running in docker, default to /app/media; else default to ./media for local runs
-    MEDIA_ROOT: str = _env("MEDIA_ROOT", "/app/media" if _is_docker() else "media")
+    MEDIA_ROOT: str = _env("MEDIA_ROOT", "/backend/media" if _is_docker() else "media")
     VIDEO_SUBDIR: str = _env("VIDEO_SUBDIR", "videos")
 
     # FAISS files

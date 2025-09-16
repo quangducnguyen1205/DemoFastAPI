@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 try:
     from dotenv import load_dotenv  # type: ignore
-except Exception:  # fallback if python-dotenv isn't installed in local editor
+except Exception:  # fallback if python-dotenv isn't installed in the local editor
     def load_dotenv(*args, **kwargs):  # type: ignore
         return False
 import os
@@ -11,14 +11,14 @@ from contextlib import asynccontextmanager
 # Load environment variables from .env as early as possible
 load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
 
-from .routers import users, videos
-from .core.database import engine, Base
+from app.routers import users, videos
+from app.core.database import engine, Base
 # Ensure models are imported so SQLAlchemy registers tables
-from . import models as _models  # noqa: F401
+from app import models as _models  # noqa: F401
 
 # Create database tables
 def create_tables():
-    # Wait for database to be ready
+    # Wait for a database to be ready
     max_retries = 30
     for i in range(max_retries):
         try:
@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app with lifespan handler
 app = FastAPI(
     title="User Management API",
-    description="A FastAPI application for managing users with PostgreSQL",
+    description="A FastAPI application for managing users with PostgresSQL",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
