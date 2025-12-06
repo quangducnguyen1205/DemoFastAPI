@@ -7,7 +7,12 @@ from typing import List
 from sqlalchemy.orm import Session
 
 from app import models
-from . import semantic_index
+from app.services.semantic_index import generate_embedding
+from app.services.semantic_index.writer import (
+    load_or_create_index,
+    add_embeddings,
+    save_index,
+)
 from app.utils import split_transcript_text
 
 
@@ -47,21 +52,13 @@ def persist_transcript_segments(db: Session, video_id: int, segments: List[str])
 
 def embed_and_update_faiss(segments: List[str], video_id: int) -> None:
     import numpy as np
-    import faiss  # type: ignore
 
     if not segments:
         return
-    embeddings = [semantic_index.generate_embedding(seg) for seg in segments]
+    embeddings = [generate_embedding(seg) for seg in segments]
     vecs = np.array(embeddings, dtype="float32")
     dim = vecs.shape[1]
-    index = semantic_index.load_faiss_index(dim)
-    # add vectors to the index
-    index.add(vecs)
-    semantic_index.save_faiss_index(index)
-    # update mapping
-    mapping = semantic_index.load_faiss_mapping()
-    start_id = index.ntotal - len(segments)
-    for offset in range(len(segments)):
-        mapping[start_id + offset] = video_id
-    semantic_index.save_faiss_mapping(mapping)
+    load_or_create_index(dim)
+    add_embeddings(vecs, [video_id] * len(segments))
+    save_index()
 

@@ -9,7 +9,12 @@ from app.services.video_processing import (
     transcribe_audio_with_whisper,
     segment_text,
     persist_transcript_segments,
-    embed_and_update_faiss,
+)
+from app.services.semantic_index import generate_embedding
+from app.services.semantic_index.writer import (
+    load_or_create_index,
+    add_embeddings,
+    save_index,
 )
 
 
@@ -32,7 +37,15 @@ def process_video_task(video_id: int, abs_video_path: str) -> dict:
 
             if segments:
                 persist_transcript_segments(db, video.id, segments)
-                embed_and_update_faiss(segments, video.id)
+
+                # Embed and write via writer API
+                import numpy as np
+                embeddings = [generate_embedding(seg) for seg in segments]
+                vecs = np.array(embeddings, dtype="float32")
+                dim = vecs.shape[1]
+                load_or_create_index(dim)
+                add_embeddings(vecs, [video.id] * len(segments))
+                save_index()
 
             video.status = "ready"
             db.commit()

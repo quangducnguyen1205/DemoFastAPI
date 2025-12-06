@@ -15,7 +15,6 @@ from app.core.database import Base, engine  # noqa: E402
 def create_test_db():
     # Create all tables at once for the shared in-memory database (StaticPool ensures persistence).
     Base.metadata.create_all(bind=engine)
-    print("Tables in metadata:", Base.metadata.tables.keys())
     yield
     Base.metadata.drop_all(bind=engine)
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import os
 import uuid
 import logging
+import pickle
 
 from sqlalchemy.orm import Session
 from typing import List
@@ -12,6 +13,8 @@ from app.services import semantic_index
 from app.schemas import VideoSearchResult, VideoCreate, VideoRead
 from app.tasks.video_tasks import process_video_task
 from app.config.settings import settings
+from app.services.semantic_index import generate_embedding
+from app.services.semantic_index.reader import load_index_if_exists, search_vector
 
 router = APIRouter()
 
@@ -36,27 +39,26 @@ def search_videos(q: str, k: int = 5, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
     try:
         # Generate query embedding
-        query_vec = semantic_index.generate_embedding(q)
+        query_vec = generate_embedding(q)
         import numpy as np  # type: ignore
         vec = query_vec.astype('float32') if hasattr(query_vec, 'astype') else np.array(query_vec, dtype='float32')
         dim = int(vec.shape[0])
 
-        # Load index & mapping
-        index = semantic_index.load_faiss_index(dim)
-        mapping = semantic_index.load_faiss_mapping()
-        if getattr(index, "ntotal", 0) == 0 or not mapping:
-            return []
-
-        # Optionally configure IVF search breadth if supported
-        if hasattr(index, "nprobe"):
-            # Heuristic breadth; adjust as needed for recall/latency
-            index.nprobe = max(8, min(64, k * 4))
+        # Load index & mapping (read-only)
+        index = load_index_if_exists(dim)
 
         # Search more segments than requested videos to allow grouping
-        topk_segments = min(max(k * 4, 50), index.ntotal)
-        D, I = index.search(vec.reshape(1, -1), topk_segments)
-        distances = D[0]
-        indices = I[0]
+        topk_segments = min(max(k * 4, 50), getattr(index, "ntotal", 0) or k)
+        if getattr(index, "ntotal", 0) == 0:
+            return []
+        distances, indices = search_vector(vec, topk_segments)
+
+        # Load mapping without importing writer functions
+        mapping_path = settings.FAISS_MAPPING_PATH
+        if not os.path.exists(mapping_path):
+            return []
+        with open(mapping_path, "rb") as f:
+            mapping: dict[int, int] = pickle.load(f)
 
         best_by_video: dict[int, float] = {}
         for faiss_id, dist in zip(indices, distances):

@@ -42,21 +42,37 @@ backend/
 tests/                     # Pytest suite (see below)
 ```
 
-### 5. Development Setup (Docker Compose)
-Create a `.env` (see `.env.example`) then:
+### 11. Quick Commands
+Build & run stack:
 ```bash
 docker compose up --build
 ```
-Access:
-```
-Swagger: http://localhost:8000/docs
-ReDoc:   http://localhost:8000/redoc
-Health:  http://localhost:8000/health
-```
-Stop services:
+Run only tests:
 ```bash
-docker compose down
+docker compose run --rm test
 ```
+Rebuild test image (e.g., after dependency change):
+```bash
+docker compose build test
+```
+
+---
+
+## 📚 Complete Documentation
+
+For comprehensive documentation suitable for academic submission (Project 1), see the **`docs/`** folder:
+
+- **[docs/INDEX.md](./docs/INDEX.md)** — Documentation navigation guide
+- **[docs/README.md](./docs/README.md)** — Detailed project overview and problem statement
+- **[docs/architecture.md](./docs/architecture.md)** — Technical system design and data flow
+- **[docs/api_reference.md](./docs/api_reference.md)** — Complete API endpoint documentation
+- **[docs/deployment_guide.md](./docs/deployment_guide.md)** — Step-by-step deployment and troubleshooting
+- **[docs/future_work.md](./docs/future_work.md)** — Roadmap and research directions
+
+**Total Documentation:** 3,000+ lines covering all aspects of the system.
+
+---
+Concise, production‑leaning FastAPI skeleton with async processing + semantic search—ready to extend.
 
 ### 6. API Highlights
 - `POST /videos/upload` → returns `{task_id, status, video_id}` and immediately schedules processing.
