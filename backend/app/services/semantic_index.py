@@ -9,7 +9,7 @@ import pickle
 import threading
 from typing import Dict
 
-from app.config.settings import settings
+from ..config.settings import settings
 
 _embedding_model = None
 _embedding_lock = threading.Lock()
