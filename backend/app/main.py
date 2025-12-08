@@ -15,6 +15,7 @@ from app.routers import users, videos, auth
 from app.core.database import engine, Base
 # Ensure models are imported so SQLAlchemy registers tables
 from app import models as _models  # noqa: F401
+from fastapi.middleware.cors import CORSMiddleware
 
 # Create database tables
 def create_tables():
@@ -50,6 +51,15 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
+)
+
+# Configure CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # hoặc ["http://localhost:5173"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include routers

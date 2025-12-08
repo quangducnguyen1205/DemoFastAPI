@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gray-100 min-h-screen font-sans text-gray-900 antialiased;
+}
+
+#root {
+  @apply min-h-screen flex flex-col;
+}

@@ -11,6 +11,7 @@ from typing import List
 from app.core.database import get_db
 from app import models
 from app.schemas import VideoSearchResult, VideoRead
+from app.schemas.transcripts import TranscriptRead
 from app.tasks.video_tasks import process_video_task
 from app.config.settings import settings
 from app.services.semantic_index import generate_embedding
@@ -215,3 +216,22 @@ async def delete_video(video_id: int, db: Session = Depends(get_db)):
         return {"message": "Video deleted successfully", "id": video_id}
 
     return await run_in_threadpool(_sync_delete_video)
+
+
+# Get video transcript
+@router.get("/{video_id}/transcript", response_model=List[TranscriptRead])
+async def get_video_transcript(video_id: int, db: Session = Depends(get_db)):
+    """Get transcript segments for a specific video, ordered by segment index."""
+    def _sync_get_transcript():
+        video = db.query(models.Video).filter(models.Video.id == video_id).first()
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        query = db.query(models.Transcript).filter(models.Transcript.video_id == video_id)
+
+        if hasattr(models.Transcript, "segment_index"):
+            query = query.order_by(models.Transcript.segment_index)
+
+        return query.all()
+
+    return await run_in_threadpool(_sync_get_transcript)

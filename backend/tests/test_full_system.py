@@ -347,3 +347,40 @@ def test_token_tampered_signature(client):
     tampered = ".".join(token)
     resp = client.get("/auth/protected", headers={"Authorization": f"Bearer {tampered}"})
     assert resp.status_code == 401
+
+
+# ==============================
+# TRANSCRIPT TESTS
+# ==============================
+
+def test_get_video_transcript_returns_segments(client):
+    video = _insert_video(title="Transcript Test")
+
+    db = SessionLocal()
+    try:
+        seg1 = models.Transcript(video_id=video.id, text="Hello", segment_index=0)
+        seg2 = models.Transcript(video_id=video.id, text="World", segment_index=1)
+        db.add_all([seg1, seg2])
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get(f"/videos/{video.id}/transcript")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["text"] == "Hello"
+    assert data[1]["text"] == "World"
+
+
+def test_get_video_transcript_unknown_video_returns_404(client):
+    resp = client.get("/videos/999999/transcript")
+    assert resp.status_code == 404
+
+
+def test_get_video_transcript_empty_returns_empty_list(client):
+    video = _insert_video(title="No Transcript Video")
+    resp = client.get(f"/videos/{video.id}/transcript")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == []

@@ -17,6 +17,7 @@ class VideoCreate(VideoBase):
 
 class VideoRead(VideoBase):
     id: int
+    status: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

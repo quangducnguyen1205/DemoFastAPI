@@ -1,5 +1,15 @@
 
 services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
   backend:
     build: ./backend
     ports:
