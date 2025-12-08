@@ -102,6 +102,15 @@ def search_videos(
 - Privacy considerations (GDPR compliance for transcripts)
 - Contribution guidelines for open-source
 
+### 5. Authentication & Authorization Foundations
+
+**Goal:** Introduce the minimum security scaffolding so user-specific routes (e.g., owner-scoped listings) can be enforced server side instead of relying solely on query params.
+
+**Ideas:**
+- Add password-based signup/login with hashed credentials (bcrypt/argon2) and JWT issuance via FastAPI security dependencies.
+- Store `owner_id` directly from the authenticated principal rather than accepting it as form/query data.
+- Gate destructive operations (DELETE `/videos/{id}`) behind role checks to prepare for future admin views.
+
 ---
 
 ## Medium-Term Features
@@ -266,6 +275,15 @@ def list_videos(token: str = Depends(oauth2_scheme), db: Session = Depends(get_d
     return videos
 ```
 
+### 6. Admin-Only Router Separation
+
+**Motivation:** Administrative actions (purging failed uploads, replaying Celery tasks, listing every user) should not live next to public APIs.
+
+**Plan:**
+- Introduce a dedicated router (e.g., `/admin`) protected by stricter roles or service-to-service tokens.
+- Move destructive operations (bulk delete, FAISS re-index triggers) into that router to keep the public surface lean.
+- Expose observability endpoints (task queue depth, video processing backlog) for operators only.
+
 ---
 
 ## Long-Term Vision
@@ -399,6 +417,14 @@ def generate_thumbnail(video_path: str, timestamp: float = 5.0) -> str:
     subprocess.run(cmd, check=True)
     return thumb_path
 ```
+
+  ### 5. Advanced Search & Multi-Modal Support
+
+  **Goal:** Move beyond transcript-only similarity by combining richer filters and multiple signals.
+
+  - Extend the REST API with additional filters (status, processing date ranges, owner groups) and expose them through `/videos/search` without breaking existing clients.
+  - Fuse embeddings from transcripts, representative video frames (CLIP), and audio descriptors so searches like "show me demos with live coding + upbeat music" become possible.
+  - Store modality-specific metadata (thumbnail hashes, audio fingerprints) to enable interactive filtering in future admin/front-end tools.
 
 **Store in Database:**
 ```python

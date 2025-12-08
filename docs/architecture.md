@@ -1,469 +1,156 @@
 # System Architecture
 
+This document explains how the FastAPI backend, Celery worker, and FAISS search layer collaborate to deliver the cleaned API surface (root/health, minimal user endpoints, and the video/upload/search flow).
+
 ## Table of Contents
-1. [High-Level Architecture](#high-level-architecture)
-2. [Core Modules](#core-modules)
-3. [Data Flow](#data-flow)
-4. [Component Interactions](#component-interactions)
-5. [FAISS Integration](#faiss-integration)
-6. [Database Schema](#database-schema)
+1. [High-Level View](#high-level-view)
+2. [Core Components](#core-components)
+3. [Async Façade Pattern](#async-façade-pattern)
+4. [Data Flows](#data-flows)
+5. [Celery + FAISS Integration](#celery--faiss-integration)
+6. [Database & Ownership Filtering](#database--ownership-filtering)
+7. [Scalability Considerations](#scalability-considerations)
 
 ---
 
-## High-Level Architecture
-
-The system follows a **layered microservices architecture** with asynchronous task processing:
+## High-Level View
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                        Client Layer                           │
-│  (HTTP Clients, Browsers, Mobile Apps, Postman, curl)        │
-└───────────────────────────┬──────────────────────────────────┘
-                            │ HTTP/REST
-                            ▼
-┌──────────────────────────────────────────────────────────────┐
-│                     API Layer (FastAPI)                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   Users      │  │   Videos     │  │   Tasks      │      │
-│  │   Router     │  │   Router     │  │   Router     │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└───────────────────────────┬──────────────────────────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        ▼                   ▼                   ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  PostgreSQL  │   │    Redis     │   │   Celery     │
-│   Database   │   │   (Broker)   │   │   Worker     │
-└──────────────┘   └──────────────┘   └──────┬───────┘
-                                              │
-                                              ▼
-                                    ┌──────────────────┐
-                                    │  FAISS Index     │
-                                    │  (Vector Store)  │
-                                    └──────────────────┘
+HTTP Client --> FastAPI Routers (users, videos)
+                    |    |  (async functions)
+                    |    +--> run_in_threadpool (SQLAlchemy, filesystem)
+                    |          |
+                    |          +--> PostgreSQL (metadata)
+                    |          +--> Media volume (uploads)
+                    |
+                    +--> Celery Broker (Redis)
+                               |
+                               +--> Celery Worker (Whisper, embeddings, FAISS writer)
+                                             |
+                                             +--> FAISS index + mapping (shared volume)
+                                             +--> PostgreSQL (status + transcripts)
+
+Search Endpoint --> FAISS Reader (load_index_if_exists + search_vector)
 ```
 
-### Architecture Principles
-
-1. **Separation of Concerns** — Each layer has a clear, single responsibility
-2. **Asynchronous Processing** — Long-running tasks (transcription, embedding) don't block API responses
-3. **Loose Coupling** — Components communicate via well-defined interfaces (REST, message queue)
-4. **Stateless API** — FastAPI backend can scale horizontally
-5. **Persistent State** — PostgreSQL for structured data, FAISS for vector index
+The API layer stays lean: GET `/`, GET `/health`, POST `/users/`, GET `/users/{id}`, and the video endpoints (`/videos/upload`, `/videos/tasks/{task_id}`, `/videos/`, `/videos/{id}`, `DELETE /videos/{id}`, `/videos/search`).
 
 ---
 
-## Core Modules
+## Core Components
 
-### 1. `app/main.py` — Application Entry Point
-
-**Purpose:** FastAPI application initialization and lifecycle management.
-
-**Key Responsibilities:**
-- Load environment variables via `python-dotenv`
-- Register API routers (users, videos)
-- Create database tables on startup (lifespan handler)
-- Provide health check and root endpoints
-
-**Code Snippet:**
-```python
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    create_tables()  # Ensure schema exists
-    yield
-
-app = FastAPI(
-    title="Video Similarity Search API",
-    lifespan=lifespan
-)
-app.include_router(users.router, prefix="/users", tags=["users"])
-app.include_router(videos.router, prefix="/videos", tags=["videos"])
-```
-
-### 2. `app/config/settings.py` — Configuration Management
-
-**Purpose:** Centralized environment-driven configuration.
-
-**Key Settings:**
-- `DATABASE_URL` — PostgreSQL connection string (or SQLite for tests)
-- `MEDIA_ROOT` — Base path for uploaded videos and FAISS files
-- `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` — Redis endpoints
-- `FAISS_INDEX_PATH` / `FAISS_MAPPING_PATH` — Vector index persistence
-
-**Design Pattern:** Singleton settings object with environment fallbacks.
-
-### 3. `app/core/database.py` — Database Engine
-
-**Purpose:** SQLAlchemy engine and session factory.
-
-**Key Components:**
-```python
-engine = create_engine(settings.DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine)
-Base = declarative_base()  # ORM base class
-
-def get_db():  # Dependency injection for FastAPI routes
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-```
-
-### 4. `app/core/celery_app.py` — Task Queue
-
-**Purpose:** Celery application for background processing.
-
-**Configuration:**
-- Broker: Redis (message queue)
-- Backend: Redis (result storage)
-- Task discovery: Auto-imports from `app.tasks.video_tasks`
-
-**Why Celery?**
-- Video transcription can take 30s–2min per video
-- Embedding generation requires heavy ML models (sentence-transformers)
-- Prevents API timeouts and enables horizontal scaling
-
-### 5. `app/models/` — ORM Models
-
-**Files:**
-- `user.py` — User account (id, username, email, timestamps)
-- `video.py` — Video metadata (id, title, path, status, owner_id)
-- `transcript.py` — Transcript segments (video_id, segment_index, text, embeddings)
-
-**Relationships:**
-- User → Videos (one-to-many)
-- Video → Transcripts (one-to-many, cascade delete)
-
-### 6. `app/routers/` — API Endpoints
-
-**Structure:**
-- `users.py` — User CRUD operations
-- `videos.py` — Video upload, search, CRUD, task status
-
-**Key Design:**
-- Pydantic schemas for request validation and response serialization
-- Dependency injection for database sessions
-- HTTPException for error handling
-
-### 7. `app/services/` — Business Logic
-
-**Purpose:** Encapsulate complex processing logic outside routers.
-
-**Modules:**
-
-#### `video_processing.py`
-- `extract_audio_to_wav()` — Uses ffmpeg to extract mono WAV
-- `transcribe_audio_with_whisper()` — Loads Whisper model and transcribes
-- `segment_text()` — Splits transcript into ~200-char chunks
-- `persist_transcript_segments()` — Saves segments to database
-- `embed_and_update_faiss()` — Generates embeddings and updates index
-
-#### `semantic_index/`
-- `__init__.py` — Embedding generation using sentence-transformers
-- `reader.py` — Read-only FAISS index operations (load, search)
-- `writer.py` — Write operations (create index, add vectors, save)
-
-**Design Rationale:**
-- Separation of read/write prevents race conditions
-- Lazy model loading (singleton pattern) reduces memory overhead
-- Thread-safe initialization using `threading.Lock()`
-
-### 8. `app/tasks/video_tasks.py` — Celery Tasks
-
-**Main Task:** `process_video_task(video_id, abs_video_path)`
-
-**Workflow:**
-1. Query video record from database
-2. Extract audio → Transcribe → Segment text
-3. Persist transcript segments to database
-4. Generate embeddings for each segment
-5. Add embeddings to FAISS index
-6. Update video status to "ready" or "failed"
-
-**Error Handling:**
-- Try-except wraps entire pipeline
-- Failures update video status to "failed" with error message
-- Database session always closed in `finally` block
+| Component | Location | Responsibility |
+|-----------|----------|----------------|
+| FastAPI app | `app/main.py` | Bootstraps the application, registers routers, exposes health + root endpoints, and keeps startup idempotent via the lifespan hook. |
+| Users router | `app/routers/users.py` | Minimal create + read handlers for associating uploads with owners. |
+| Videos router | `app/routers/videos.py` | Handles uploads, listing/filtering, retrieval, deletion, search, and task-status polling. |
+| Database layer | `app/core/database.py` | SQLAlchemy engine/session factory and dependency provider (`get_db`). |
+| Celery app | `app/core/celery_app.py` + `app/tasks/video_tasks.py` | Runs the heavy Whisper/embedding/FAISS pipeline for each upload. |
+| Semantic services | `app/services/semantic_index/*` | Generate embeddings, load FAISS index, perform searches. |
+| Tests | `backend/tests/test_app_integration.py` | Exercises the public API surface with patched ML components. |
 
 ---
 
-## Data Flow
+## Async Façade Pattern
 
-### Video Upload Flow
+Routers are declared `async`, but the underlying logic (SQLAlchemy ORM calls, filesystem access, Celery client) is synchronous. Each handler wraps the synchronous function in `run_in_threadpool`:
 
-```
-1. Client uploads video file
-   ↓
-2. FastAPI endpoint receives file
-   ↓
-3. Save file to disk (unique filename)
-   ↓
-4. Create Video record (status="processing")
-   ↓
-5. Enqueue Celery task with video_id + path
-   ↓
-6. Return task_id + video_id to client
-   ↓ (API response complete)
-7. Celery worker picks up task
-   ↓
-8. Extract audio (ffmpeg)
-   ↓
-9. Transcribe audio (Whisper)
-   ↓
-10. Segment transcript text
-    ↓
-11. Save segments to database
-    ↓
-12. Generate embeddings (sentence-transformers)
-    ↓
-13. Add to FAISS index
-    ↓
-14. Update video status to "ready"
+```python
+def _sync_list_videos():
+    query = db.query(models.Video)
+    if owner_id is not None:
+        query = query.filter(models.Video.owner_id == owner_id)
+    return query.offset(skip).limit(limit).all()
+
+return await run_in_threadpool(_sync_list_videos)
 ```
 
-### Search Flow
-
-```
-1. Client sends search query "machine learning"
-   ↓
-2. FastAPI endpoint receives query string
-   ↓
-3. Generate query embedding (sentence-transformers)
-   ↓
-4. Load FAISS index + segment→video mapping
-   ↓
-5. Search index for top-k nearest vectors
-   ↓
-6. Map segment IDs to video IDs
-   ↓
-7. Group by video, keep best similarity per video
-   ↓
-8. Query database for video metadata
-   ↓
-9. Return sorted list of videos with scores
-```
+Benefits:
+- Keeps FastAPI's event loop non-blocking.
+- Avoids rewriting all dependencies to be async-aware.
+- Threadpool boundaries make mocking easier in tests.
 
 ---
 
-## Component Interactions
+## Data Flows
 
-### API ↔ Database
+### Upload + Processing
 
-**Pattern:** Dependency injection via `get_db()`
+1. Client submits multipart request to `POST /videos/upload`.
+2. Endpoint writes the binary into `MEDIA_ROOT/videos/` (UUID file name) and inserts a `Video` row with `status="processing"` + optional `owner_id`.
+3. Celery task `process_video_task.delay(video_id, abs_path)` queues work through Redis.
+4. Worker pipeline:
+   - Extract audio via ffmpeg.
+   - Transcribe with Whisper.
+   - Segment transcript text.
+   - Persist transcript rows in PostgreSQL.
+   - Generate embeddings with sentence-transformers.
+   - Update FAISS index (`faiss_index.faiss`) and mapping (`faiss_mapping.pkl`).
+   - Set the video `status` to `ready` or `failed`.
 
-```python
-@router.get("/videos/")
-def list_videos(db: Session = Depends(get_db)):
-    return db.query(models.Video).all()
-```
+Clients poll `GET /videos/tasks/{task_id}` and optionally fetch the updated video record once status flips to `ready`.
 
-- Connection pooling managed by SQLAlchemy
-- Session lifecycle: created per request, closed after response
+### Listing + Detail + Delete
 
-### API ↔ Celery
+- `GET /videos/?owner_id=<int>` reads directly from SQLAlchemy; no Celery involvement.
+- `GET /videos/{id}` and `DELETE /videos/{id}` operate on the same table. Delete attempts to remove the corresponding file but guards against path traversal by checking the resolved path against the configured video directory.
 
-**Pattern:** Fire-and-forget task enqueue
+### Semantic Search
 
-```python
-async_result = process_video_task.delay(video_id, path)
-return {"task_id": async_result.id}
-```
-
-- API doesn't wait for task completion
-- Client polls `/videos/tasks/{task_id}` for status
-- Task results stored in Redis backend
-
-### Celery Worker ↔ Database
-
-**Pattern:** Direct session creation (not via FastAPI dependency injection)
-
-```python
-db = SessionLocal()
-try:
-    # ... process video ...
-    db.commit()
-finally:
-    db.close()
-```
-
-- Worker creates independent database connections
-- No shared state with API server
-
-### Celery Worker ↔ FAISS
-
-**Pattern:** File-based index persistence
-
-```python
-# Writer adds embeddings
-index = faiss.IndexFlatL2(dim)
-index.add(vectors)
-faiss.write_index(index, FAISS_INDEX_PATH)
-
-# Reader loads index
-index = faiss.read_index(FAISS_INDEX_PATH)
-distances, indices = index.search(query_vec, k)
-```
-
-- Index stored on shared filesystem (Docker volume)
-- Both API and worker can read index
-- Only worker writes to index (no concurrent write issues)
+1. FastAPI handler validates `q`, `k`, and optional `owner_id`.
+2. Query embedding is generated (sentence-transformer) inside `_sync_search`.
+3. `load_index_if_exists(dim)` returns a cached FAISS `IndexFlatL2` (or empty index if no file yet).
+4. `search_vector` runs `index.search` for more segments than videos (k×4, minimum 50) to allow deduplication.
+5. The pickled mapping (`faiss_mapping.pkl`) translates FAISS row IDs back to `video_id` values.
+6. For each candidate video, the handler fetches metadata from PostgreSQL, converts L2 distances to bounded similarity scores, filters by `owner_id` when provided, sorts, and returns the top `k` `VideoSearchResult` models.
 
 ---
 
-## FAISS Integration
+## Celery & FAISS Integration
 
-### What is FAISS?
+| Stage | Responsibility | Notes |
+|-------|----------------|-------|
+| Celery broker | Redis | Transports messages between API uploads and workers. |
+| Celery worker | `process_video_task` | Includes error handling and DB session management; failures mark the video as `failed` and bubble a short message back to `/videos/tasks/{task_id}`. |
+| FAISS writer | `app/services/semantic_index/writer.py` (invoked from the worker) | Adds new vectors, persists both index and mapping synchronously to avoid corruption. |
+| FAISS reader | `app/services/semantic_index/reader.py` (used by FastAPI) | Lazily loads the index, caches it in-memory, and only performs read/search operations. |
 
-**FAISS** (Facebook AI Similarity Search) is a library for efficient similarity search and clustering of dense vectors.
-
-**Why FAISS?**
-- Handles millions of vectors with sub-second search latency
-- CPU and GPU implementations available
-- Supports approximate nearest neighbor (ANN) algorithms
-- Open-source and battle-tested (Meta AI)
-
-### Index Type
-
-**Current:** `IndexFlatL2` (brute-force L2 distance)
-
-**Characteristics:**
-- Exact search (no approximation)
-- Simple to implement and debug
-- Works well for <100k vectors
-- O(n) search complexity
-
-**Production Alternative:** `IndexIVFFlat` or `IndexHNSW` for faster search on large datasets.
-
-### Vector Dimensionality
-
-**Model:** `all-MiniLM-L6-v2` (sentence-transformers)
-- Embedding dimension: **384**
-- Fast inference (~1ms per sentence on CPU)
-- Good balance of speed and quality
-
-### Mapping Structure
-
-**Problem:** FAISS index stores vectors by position (0, 1, 2, ...), but we need to map back to video IDs.
-
-**Solution:** Maintain a separate pickle file `faiss_mapping.pkl`:
-
-```python
-{
-    0: video_id_1,  # FAISS index 0 → video 1
-    1: video_id_1,  # FAISS index 1 → video 1 (another segment)
-    2: video_id_3,  # FAISS index 2 → video 3
-    ...
-}
-```
-
-**Update Process:**
-- When adding N embeddings for video V, extend mapping with `[V] * N`
-- Persist mapping atomically after updating index
-
-### Search Algorithm
-
-**Pseudocode:**
-```python
-1. query_embedding = encode(query_text)
-2. distances, indices = faiss_index.search(query_embedding, k=50)
-3. best_per_video = {}
-4. for idx, dist in zip(indices, distances):
-       video_id = mapping[idx]
-       similarity = 1 / (1 + dist)  # Convert L2 to bounded score
-       best_per_video[video_id] = max(best_per_video[video_id], similarity)
-5. Sort videos by similarity descending
-6. Return top k videos
-```
-
-**Key Insight:** Multiple transcript segments from the same video → deduplicate by keeping highest similarity score.
+Because writes happen only inside the worker, the API server can safely cache the FAISS index without dealing with concurrent writes. If a worker updates the files, the process can be restarted (or cache invalidated manually) to pick up the latest vectors.
 
 ---
 
-## Database Schema
+## Database & Ownership Filtering
 
-### Table: `users`
+### Tables
 
-| Column | Type | Constraints |
-|--------|------|-------------|
-| id | INTEGER | PRIMARY KEY |
-| username | VARCHAR(100) | NOT NULL, UNIQUE |
-| email | VARCHAR(255) | NOT NULL, UNIQUE |
-| created_at | TIMESTAMP | DEFAULT NOW() |
+- `users`
+  - `id`, `name`, `email`
+  - Simple table used for associating uploads with an owner.
+- `videos`
+  - `id`, `title`, `description`, `url`, `path`, `owner_id`, `status`, timestamps.
+  - `owner_id` is nullable; routes now support filtering by this column.
+- `transcripts` (not exposed through public APIs yet)
+  - Stores transcript text plus metadata used by FAISS updates.
 
-### Table: `videos`
+### Owner Filters
 
-| Column | Type | Constraints |
-|--------|------|-------------|
-| id | INTEGER | PRIMARY KEY |
-| title | VARCHAR(255) | NOT NULL |
-| description | TEXT | NULL |
-| url | VARCHAR(500) | NOT NULL |
-| path | VARCHAR(500) | NULL, INDEXED |
-| owner_id | INTEGER | FK → users.id, NULL |
-| status | VARCHAR(50) | NULL ('processing', 'ready', 'failed') |
-| created_at | TIMESTAMP | DEFAULT NOW() |
-| updated_at | TIMESTAMP | ON UPDATE NOW() |
+- `GET /videos/` applies `Video.owner_id == owner_id` whenever the query param is supplied.
+- `GET /videos/search` filters **after** the FAISS ranking step; if `owner_id` is provided, any fetched `Video` whose `owner_id` does not match is discarded before the final top-`k` slice.
 
-### Table: `transcripts`
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| id | INTEGER | PRIMARY KEY |
-| video_id | INTEGER | FK → videos.id, NOT NULL |
-| segment_index | INTEGER | NOT NULL |
-| text | TEXT | NOT NULL |
-| created_at | TIMESTAMP | DEFAULT NOW() |
-
-**Indexes:**
-- `videos.path` — Fast lookup by file path
-- `videos.owner_id` — Query videos by user
-- `transcripts.video_id` — Join transcripts with videos
-
-**Cascade Behavior:**
-- Deleting a video → automatically deletes all associated transcripts
+This approach keeps the FAISS index global (single vector space) but lets clients scope results to their own uploads without duplicating indices.
 
 ---
 
 ## Scalability Considerations
 
-### Current Limitations
-- Single FAISS index file (no sharding)
-- Single Celery worker instance
-- CPU-only embeddings and search
+- **API layer**: stateless; scale horizontally by running multiple `backend` containers behind a load balancer.
+- **Threadpool size**: FastAPI inherits the default `anyio.to_thread` pool; tune via Uvicorn settings if uploads compete with heavy synchronous queries.
+- **Worker count**: scale `worker` services independently (each requires Whisper + embedding model downloads). CPU is the main bottleneck.
+- **Storage**: mount `MEDIA_ROOT` on persistent storage. The FAISS index and mapping live next to the uploads so snapshots/backups capture both.
+- **Cache invalidation**: restart FastAPI containers after major FAISS updates to reload the cached index, or extend the reader to detect newer timestamps.
+- **Future auth**: planned enhancements include authentication/authorization layers and admin-only routers (see `docs/future_work.md`).
 
-### Scaling Strategies
-
-**Horizontal Scaling:**
-1. Deploy multiple Celery workers (Kubernetes, Docker Swarm)
-2. Use distributed Redis cluster
-3. Add load balancer in front of multiple FastAPI instances
-
-**FAISS Optimization:**
-1. Switch to `IndexIVFFlat` with 100–1000 clusters for >1M vectors
-2. Enable GPU acceleration (`faiss-gpu` library)
-3. Consider quantization (`IndexIVFPQ`) to reduce memory footprint
-
-**Database Optimization:**
-1. Add read replicas for search queries
-2. Partition `transcripts` table by video_id (PostgreSQL partitioning)
-3. Cache frequent searches in Redis
-
-**Storage:**
-1. Move media files to S3/GCS for durability
-2. Use CDN for video delivery
-3. Separate FAISS index to dedicated storage server
-
----
-
-## Summary
-
-This architecture provides a **solid foundation** for a video similarity search system with:
-
-✅ **Clear separation** of API, processing, and storage layers  
-✅ **Asynchronous processing** for scalability  
-✅ **Efficient vector search** using FAISS  
-✅ **Extensible design** for future features  
-
-For deployment instructions, see [deployment_guide.md](./deployment_guide.md).  
-For API details, see [api_reference.md](./api_reference.md).
+For implementation specifics, inspect:
+- `app/routers/videos.py` for async façade patterns and owner filtering.
+- `app/tasks/video_tasks.py` for Celery orchestration.
+- `app/services/semantic_index/reader.py` for FAISS search mechanics.

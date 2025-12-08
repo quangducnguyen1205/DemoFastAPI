@@ -73,13 +73,5 @@ services:
     # No dependencies; pure in-container test harness
     profiles: [test]
 
-  adminer:
-    image: adminer:4
-    restart: always
-    ports:
-      - "127.0.0.1:8080:8080"
-    depends_on:
-      - db
-
 volumes:
   postgres_data:

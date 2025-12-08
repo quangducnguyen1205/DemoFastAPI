@@ -149,3 +149,5 @@ tmp/
 *.faiss
 *.pkl
 *.pickle
+
+/queries

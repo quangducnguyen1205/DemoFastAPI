@@ -1,627 +1,226 @@
 # API Reference
 
-## Table of Contents
-1. [Base URL](#base-url)
-2. [Authentication](#authentication)
-3. [Health & Status](#health--status)
-4. [User Endpoints](#user-endpoints)
-5. [Video Endpoints](#video-endpoints)
-6. [Search Endpoint](#search-endpoint)
-7. [Task Status Endpoint](#task-status-endpoint)
-8. [Error Responses](#error-responses)
-
----
+This document describes the currently supported REST API for the Video Similarity Search backend. All endpoints are served from the FastAPI app inside `docker compose` on port `8000`.
 
 ## Base URL
 
-**Development (Docker Compose):**
 ```
 http://localhost:8000
 ```
 
-**Interactive Documentation:**
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+Interactive documentation:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+Authentication is not yet enforced; all routes are publicly accessible in development deployments.
 
 ---
 
-## Authentication
-
-**Current Implementation:** None (open API)
-
-**Future Consideration:** JWT-based authentication for user-specific operations.
-
----
-
-## Health & Status
+## Global Endpoints
 
 ### GET `/`
-
-**Description:** Root endpoint with API information.
-
-**Response (200 OK):**
-```json
-{
-  "message": "Welcome to User Management API",
-  "docs": "/docs",
-  "redoc": "/redoc"
-}
-```
+- **Purpose:** Simple landing endpoint confirming the service is running and linking to interactive docs.
+- **Response 200 Example:**
+  ```json
+  {
+    "message": "Welcome to User Management API",
+    "docs": "/docs",
+    "redoc": "/redoc"
+  }
+  ```
 
 ### GET `/health`
-
-**Description:** Health check endpoint for monitoring.
-
-**Response (200 OK):**
-```json
-{
-  "status": "healthy"
-}
-```
-
-**Use Case:** Load balancer health checks, uptime monitoring.
+- **Purpose:** Health probe for load balancers and uptime monitors.
+- **Response 200 Example:**
+  ```json
+  {"status": "healthy"}
+  ```
 
 ---
 
 ## User Endpoints
 
 ### POST `/users/`
-
-**Description:** Create a new user account.
-
-**Request Body:**
-```json
-{
-  "username": "john_doe",
-  "email": "john@example.com"
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "id": 1,
-  "username": "john_doe",
-  "email": "john@example.com",
-  "created_at": "2025-09-14T10:30:00Z"
-}
-```
-
-**Error Responses:**
-- `422 Unprocessable Entity` — Invalid request body
-- `500 Internal Server Error` — Database constraint violation (duplicate username/email)
-
----
-
-### GET `/users/`
-
-**Description:** List all users (paginated).
-
-**Query Parameters:**
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| skip | integer | 0 | Number of records to skip |
-| limit | integer | 100 | Maximum records to return |
-
-**Example Request:**
-```bash
-curl "http://localhost:8000/users/?skip=0&limit=10"
-```
-
-**Response (200 OK):**
-```json
-[
+- **Purpose:** Create a basic user record. Used mainly to associate uploaded videos with owners.
+- **Request Body:**
+  ```json
+  {
+    "name": "Ada Lovelace",
+    "email": "ada@example.com"
+  }
+  ```
+- **Response 200 Example:**
+  ```json
   {
     "id": 1,
-    "username": "alice",
-    "email": "alice@example.com",
-    "created_at": "2025-09-13T08:00:00Z"
-  },
-  {
-    "id": 2,
-    "username": "bob",
-    "email": "bob@example.com",
-    "created_at": "2025-09-14T09:15:00Z"
+    "name": "Ada Lovelace",
+    "email": "ada@example.com"
   }
-]
-```
-
----
+  ```
+- **Notes:** Returns `400` if an email already exists.
 
 ### GET `/users/{user_id}`
-
-**Description:** Get a single user by ID.
-
-**Path Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| user_id | integer | User's unique identifier |
-
-**Example Request:**
-```bash
-curl "http://localhost:8000/users/1"
-```
-
-**Response (200 OK):**
-```json
-{
-  "id": 1,
-  "username": "alice",
-  "email": "alice@example.com",
-  "created_at": "2025-09-13T08:00:00Z"
-}
-```
-
-**Error Responses:**
-- `404 Not Found` — User does not exist
-
----
-
-### PUT `/users/{user_id}`
-
-**Description:** Update an existing user (full update).
-
-**Path Parameters:** `user_id` (integer)
-
-**Request Body:**
-```json
-{
-  "username": "alice_updated",
-  "email": "alice_new@example.com"
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "id": 1,
-  "username": "alice_updated",
-  "email": "alice_new@example.com",
-  "created_at": "2025-09-13T08:00:00Z"
-}
-```
-
-**Error Responses:**
-- `404 Not Found` — User does not exist
-
----
-
-### DELETE `/users/{user_id}`
-
-**Description:** Delete a user account.
-
-**Path Parameters:** `user_id` (integer)
-
-**Example Request:**
-```bash
-curl -X DELETE "http://localhost:8000/users/1"
-```
-
-**Response (200 OK):**
-```json
-{
-  "detail": "User deleted"
-}
-```
-
-**Error Responses:**
-- `404 Not Found` — User does not exist
+- **Purpose:** Retrieve a single user by numeric ID.
+- **Path Parameter:** `user_id` (integer)
+- **Response 200 Example:**
+  ```json
+  {
+    "id": 1,
+    "name": "Ada Lovelace",
+    "email": "ada@example.com"
+  }
+  ```
+- **Errors:** `404` when the user does not exist.
 
 ---
 
 ## Video Endpoints
 
 ### POST `/videos/upload`
-
-**Description:** Upload a video file for processing. Returns immediately with a task ID for background transcription and embedding generation.
-
-**Request:**
-- **Content-Type:** `multipart/form-data`
-
-**Form Fields:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| file | File | Yes | Video file (mp4, avi, mov, etc.) |
-| title | string | Yes | Video title |
-| owner_id | integer | No | User ID of uploader |
-
-**Example Request (curl):**
-```bash
-curl -X POST "http://localhost:8000/videos/upload" \
-  -F "file=@/path/to/video.mp4" \
-  -F "title=Introduction to Machine Learning" \
-  -F "owner_id=1"
-```
-
-**Example Request (Python):**
-```python
-import requests
-
-with open("video.mp4", "rb") as f:
-    response = requests.post(
-        "http://localhost:8000/videos/upload",
-        files={"file": f},
-        data={"title": "My Video", "owner_id": 1}
-    )
-print(response.json())
-```
-
-**Response (200 OK):**
-```json
-{
-  "task_id": "7f9d8e6c-5b4a-3c2d-1e0f-a9b8c7d6e5f4",
-  "status": "processing",
-  "video_id": 42
-}
-```
-
-**Fields Explained:**
-- `task_id` — Celery task identifier (use to check progress)
-- `status` — Initial status ("processing")
-- `video_id` — Database record ID (use for future queries)
-
-**Error Responses:**
-- `422 Unprocessable Entity` — Missing required fields or invalid file
-- `500 Internal Server Error` — File save failed or database error
-
-**Processing Pipeline:**
-1. Save file to `media/videos/` directory
-2. Create database record with `status="processing"`
-3. Enqueue Celery task for:
-   - Audio extraction (ffmpeg)
-   - Transcription (Whisper)
-   - Segmentation
-   - Embedding generation (sentence-transformers)
-   - FAISS index update
-4. Update video status to `"ready"` or `"failed"`
-
----
+- **Purpose:** Upload a video file and enqueue transcription + embedding generation. Work is offloaded to a Celery worker so the HTTP request returns immediately.
+- **Form Data (multipart):**
+  | Field | Type | Required | Description |
+  |-------|------|----------|-------------|
+  | `file` | Binary file | Yes | MP4 (or other ffmpeg-supported) video. |
+  | `title` | string | Yes | Display name for the video. |
+  | `owner_id` | integer | No | Optional user ID to tag ownership. |
+- **Response 200 Example:**
+  ```json
+  {
+    "task_id": "b0f1a94c-5177-4b23-a931-225420fd0fb6",
+    "status": "processing",
+    "video_id": 42
+  }
+  ```
+- **Background Processing:**
+  1. File saved under `MEDIA_ROOT/videos/` with a UUID filename.
+  2. Database row created with `status="processing"` and optional `owner_id`.
+  3. Celery task `process_video_task` receives `(video_id, absolute_path)` to run Whisper, segment transcripts, generate embeddings, and update the FAISS index.
 
 ### GET `/videos/tasks/{task_id}`
-
-**Description:** Check the status of a background video processing task.
-
-**Path Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| task_id | string (UUID) | Task identifier from upload response |
-
-**Example Request:**
-```bash
-curl "http://localhost:8000/videos/tasks/7f9d8e6c-5b4a-3c2d-1e0f-a9b8c7d6e5f4"
-```
-
-**Response (200 OK) — Processing:**
-```json
-{
-  "status": "PENDING"
-}
-```
-
-**Response (200 OK) — Success:**
-```json
-{
-  "status": "SUCCESS",
-  "result": {
-    "status": "ready",
-    "segments": [
-      "Welcome to this tutorial on machine learning.",
-      "In this video, we will cover supervised learning algorithms.",
-      "Let's start with linear regression."
-    ]
-  }
-}
-```
-
-**Response (200 OK) — Failure:**
-```json
-{
-  "status": "FAILURE",
-  "error": "Transcription failed: Whisper model loading error"
-}
-```
-
-**Possible Status Values:**
-| Status | Description |
-|--------|-------------|
-| PENDING | Task queued, not yet started |
-| STARTED | Worker picked up task |
-| SUCCESS | Task completed successfully |
-| FAILURE | Task failed with error |
-| RETRY | Task will be retried |
-
----
-
-### GET `/videos/search`
-
-**Description:** Semantic search over video transcripts using FAISS vector similarity.
-
-**Query Parameters:**
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| q | string | Yes | — | Search query text |
-| k | integer | No | 5 | Number of videos to return |
-
-**Example Request:**
-```bash
-curl "http://localhost:8000/videos/search?q=neural%20networks&k=3"
-```
-
-**Response (200 OK):**
-```json
-[
-  {
-    "video_id": 15,
-    "title": "Deep Learning Fundamentals",
-    "path": "videos/abc123.mp4",
-    "similarity_score": 0.89
-  },
-  {
-    "video_id": 7,
-    "title": "Introduction to AI",
-    "path": "videos/def456.mp4",
-    "similarity_score": 0.76
-  },
-  {
-    "video_id": 23,
-    "title": "Computer Vision Tutorial",
-    "path": "videos/ghi789.mp4",
-    "similarity_score": 0.68
-  }
-]
-```
-
-**Fields Explained:**
-- `video_id` — Database record ID
-- `title` — Video title from metadata
-- `path` — Relative file path (can be used to construct download URL)
-- `similarity_score` — Semantic similarity (0–1, higher = more relevant)
-
-**Search Algorithm:**
-1. Generate query embedding using sentence-transformers
-2. Search FAISS index for top-N nearest vectors (N = k × 4)
-3. Map segment IDs to video IDs
-4. Group by video, keep highest similarity per video
-5. Return top k videos sorted by score
-
-**Error Responses:**
-- `400 Bad Request` — Empty query string
-- `500 Internal Server Error` — FAISS index not found or corrupted
-
-**Note:** If no videos have been processed yet, returns empty array `[]`.
-
----
-
-### POST `/videos/`
-
-**Description:** Manually create a video record (without file upload).
-
-**Request Body:**
-```json
-{
-  "title": "Sample Video",
-  "description": "A sample video description",
-  "url": "videos/sample.mp4"
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "id": 10,
-  "title": "Sample Video",
-  "description": "A sample video description",
-  "url": "videos/sample.mp4",
-  "path": null,
-  "owner_id": null,
-  "status": null,
-  "created_at": "2025-09-14T12:00:00Z",
-  "updated_at": null
-}
-```
-
----
+- **Purpose:** Poll Celery for task status that was returned from `/videos/upload`.
+- **Path Parameter:** `task_id` — UUID string returned in the upload response.
+- **Responses:**
+  - `{"status": "PENDING"}` — task created but not started.
+  - `{"status": "SUCCESS", "result": {...}}` — includes any payload returned by the worker (such as final status info).
+  - `{"status": "FAILURE", "error": "message"}` — worker failed; `error` contains text traceback summary.
+- **Notes:** This endpoint mirrors Celery states and does not mutate data.
 
 ### GET `/videos/`
-
-**Description:** List all videos (paginated).
-
-**Query Parameters:**
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| skip | integer | 0 | Offset for pagination |
-| limit | integer | 100 | Max records to return |
-
-**Example Request:**
-```bash
-curl "http://localhost:8000/videos/?skip=0&limit=10"
-```
-
-**Response (200 OK):**
-```json
-[
-  {
-    "id": 1,
-    "title": "Introduction to Python",
-    "description": "Learn Python basics",
-    "url": "videos/python_intro.mp4",
-    "path": "videos/abc123.mp4",
-    "owner_id": 5,
-    "status": "ready",
-    "created_at": "2025-09-10T08:30:00Z",
-    "updated_at": "2025-09-10T08:35:00Z"
-  },
-  {
-    "id": 2,
-    "title": "Advanced JavaScript",
-    "description": null,
-    "url": "videos/js_advanced.mp4",
-    "path": "videos/def456.mp4",
-    "owner_id": 3,
-    "status": "processing",
-    "created_at": "2025-09-12T14:20:00Z",
-    "updated_at": null
-  }
-]
-```
-
----
+- **Purpose:** List stored video metadata with optional ownership filtering.
+- **Query Parameters:**
+  | Name | Type | Default | Description |
+  |------|------|---------|-------------|
+  | `skip` | integer | `0` | Offset for pagination. |
+  | `limit` | integer | `100` | Maximum rows to return. |
+  | `owner_id` | integer | `None` | When provided, only videos owned by that user are returned. |
+- **Response 200 Example:**
+  ```json
+  [
+    {
+      "id": 42,
+      "title": "Demo Upload",
+      "description": null,
+      "url": "videos/7a1c2d1a.mp4",
+      "path": "videos/7a1c2d1a.mp4",
+      "owner_id": 1,
+      "status": "ready"
+    }
+  ]
+  ```
 
 ### GET `/videos/{video_id}`
-
-**Description:** Get a single video by ID.
-
-**Path Parameters:** `video_id` (integer)
-
-**Example Request:**
-```bash
-curl "http://localhost:8000/videos/1"
-```
-
-**Response (200 OK):**
-```json
-{
-  "id": 1,
-  "title": "Introduction to Python",
-  "description": "Learn Python basics",
-  "url": "videos/python_intro.mp4",
-  "path": "videos/abc123.mp4",
-  "owner_id": 5,
-  "status": "ready",
-  "created_at": "2025-09-10T08:30:00Z",
-  "updated_at": "2025-09-10T08:35:00Z"
-}
-```
-
-**Error Responses:**
-- `404 Not Found` — Video does not exist
-
----
-
-### PUT `/videos/{video_id}`
-
-**Description:** Update video metadata (does not re-process file).
-
-**Path Parameters:** `video_id` (integer)
-
-**Request Body:**
-```json
-{
-  "title": "Updated Title",
-  "description": "Updated description",
-  "url": "videos/new_path.mp4"
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "id": 1,
-  "title": "Updated Title",
-  "description": "Updated description",
-  "url": "videos/new_path.mp4",
-  "path": "videos/abc123.mp4",
-  "owner_id": 5,
-  "status": "ready",
-  "created_at": "2025-09-10T08:30:00Z",
-  "updated_at": "2025-09-14T10:00:00Z"
-}
-```
-
----
+- **Purpose:** Fetch a single video record by ID.
+- **Path Parameter:** `video_id` (integer)
+- **Response 200 Example:**
+  ```json
+  {
+    "id": 42,
+    "title": "Demo Upload",
+    "description": null,
+    "url": "videos/7a1c2d1a.mp4",
+    "path": "videos/7a1c2d1a.mp4",
+    "owner_id": 1,
+    "status": "ready"
+  }
+  ```
+- **Errors:** `404` when no record exists.
 
 ### DELETE `/videos/{video_id}`
+- **Purpose:** Remove a video record and (when possible) delete the associated media file.
+- **Response 200 Example:**
+  ```json
+  {
+    "message": "Video deleted successfully",
+    "id": 42
+  }
+  ```
+- **Notes:** If the stored file path does not resolve under the configured video directory, deletion is skipped and logged.
 
-**Description:** Delete a video record and associated file.
+---
 
-**Path Parameters:** `video_id` (integer)
+## Search Endpoint
 
-**Example Request:**
+### GET `/videos/search`
+- **Purpose:** Semantic search across processed video transcripts using FAISS vectors.
+- **Query Parameters:**
+  | Name | Type | Required | Default | Description |
+  |------|------|----------|---------|-------------|
+  | `q` | string | Yes | — | Natural-language query text. Must be non-empty. |
+  | `k` | integer | No | `5` | Number of videos to return (top-k). |
+  | `owner_id` | integer | No | `None` | When set, results whose `owner_id` does not match are dropped after FAISS ranking. |
+- **Example Request:**
+  ```bash
+  curl "http://localhost:8000/videos/search?q=deep%20learning&k=3&owner_id=1"
+  ```
+- **Response 200 Example:**
+  ```json
+  [
+    {
+      "video_id": 42,
+      "title": "Transformer Primer",
+      "path": "videos/7a1c2d1a.mp4",
+      "similarity_score": 0.87
+    }
+  ]
+  ```
+- **Error Cases:**
+  - `400` when `q` is blank or whitespace.
+  - `500` when FAISS or mapping files cannot be loaded.
+- **Processing Notes:**
+  1. Query embedding generated via sentence-transformer.
+  2. `load_index_if_exists` loads a read-only FAISS index.
+  3. Search retrieves more transcript segments than requested to allow grouping.
+  4. Segment IDs are mapped back to `video_id` using the pickled mapping file.
+  5. For each video, the highest similarity score is retained, results are sorted, `owner_id` filtering is applied (if provided), and the top `k` entries are returned.
+
+---
+
+## Error Handling
+
+- All endpoints raise `HTTPException` with an informative `detail` field when validation fails (`400`/`422`) or rows are missing (`404`).
+- Unexpected server-side failures log warnings and return `500` with a generic message to avoid leaking implementation details.
+- Semantic search gracefully returns an empty list when the FAISS index contains no vectors yet.
+
+---
+
+## Example cURL Workflow
+
 ```bash
-curl -X DELETE "http://localhost:8000/videos/1"
+# 1. Create a user
+curl -s -X POST http://localhost:8000/users/ \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Demo", "email": "demo@example.com"}'
+
+# 2. Upload a video and associate with that user
+curl -s -X POST http://localhost:8000/videos/upload \
+  -F "file=@sample.mp4" \
+  -F "title=Sample Talk" \
+  -F "owner_id=1"
+
+# 3. Poll the task status
+curl -s http://localhost:8000/videos/tasks/<task_id>
+
+# 4. Search across processed videos, restricting to the owner
+curl -s "http://localhost:8000/videos/search?q=transformer&owner_id=1"
 ```
-
-**Response (200 OK):**
-```json
-{
-  "detail": "Video deleted"
-}
-```
-
-**Side Effects:**
-- Removes video file from `media/videos/` directory (if path is safe)
-- Deletes all associated transcript segments (cascade)
-- **Does not** remove embeddings from FAISS index (requires manual rebuild)
-
-**Error Responses:**
-- `404 Not Found` — Video does not exist
-
----
-
-## Error Responses
-
-### Standard Error Format
-
-All errors return a JSON object with a `detail` field:
-
-```json
-{
-  "detail": "Error message here"
-}
-```
-
-### HTTP Status Codes
-
-| Code | Meaning | Example Scenario |
-|------|---------|------------------|
-| 200 | Success | Request completed successfully |
-| 400 | Bad Request | Empty search query, invalid parameters |
-| 404 | Not Found | User/video ID does not exist |
-| 422 | Unprocessable Entity | Invalid request body (Pydantic validation) |
-| 500 | Internal Server Error | Database connection failed, FAISS error |
-
-### Example Error Response
-
-**Request:**
-```bash
-curl "http://localhost:8000/videos/search?q="
-```
-
-**Response (400 Bad Request):**
-```json
-{
-  "detail": "Query parameter 'q' cannot be empty"
-}
-```
-
----
-
-## Rate Limiting
-
-**Current Implementation:** None
-
-**Future Consideration:** Implement rate limiting to prevent abuse:
-- 100 requests/minute per IP for search
-- 10 uploads/hour per user
-
----
-
-## API Versioning
-
-**Current Version:** No explicit versioning (v1 implicit)
-
-**Future Strategy:** Use URL path versioning (`/api/v2/videos/...`) when introducing breaking changes.
-
----
-
-## Summary
-
-This API provides:
-
-✅ **User management** — CRUD operations for user accounts  
-✅ **Video upload** — Asynchronous processing with task tracking  
-✅ **Semantic search** — Content-based similarity using FAISS  
-✅ **Task monitoring** — Real-time status updates via Celery  
-
-For system architecture details, see [architecture.md](./architecture.md).  
-For deployment instructions, see [deployment_guide.md](./deployment_guide.md).
