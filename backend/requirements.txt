@@ -14,3 +14,5 @@ redis==6.4.0
 pytest
 httpx
 pytest-asyncio
+passlib[bcrypt]
+bcrypt==4.0.1

@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 # Load environment variables from .env as early as possible
 load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
 
-from app.routers import users, videos
+from app.routers import users, videos, auth
 from app.core.database import engine, Base
 # Ensure models are imported so SQLAlchemy registers tables
 from app import models as _models  # noqa: F401
@@ -53,6 +53,7 @@ app = FastAPI(
 )
 
 # Include routers
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(videos.router, prefix="/videos", tags=["videos"])
 

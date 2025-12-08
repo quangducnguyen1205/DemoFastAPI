@@ -110,6 +110,14 @@ async def upload_video(
     owner_id: int | None = Form(None),
     db: Session = Depends(get_db)
 ):
+    # Validate MIME type
+    content_type = file.content_type or ""
+    if not content_type.startswith("video/"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid file type '{content_type}'. Only video files are allowed.",
+        )
+
     def _sync_upload_video():
         # Generate unique filename preserving extension
         original_ext = os.path.splitext(file.filename)[1]
