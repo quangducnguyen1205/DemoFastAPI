@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { Badge, Spinner } from './ui'
 
 interface VideoItemProps {
   id: number
@@ -9,32 +10,19 @@ interface VideoItemProps {
 function VideoItem({ id, title, status }: VideoItemProps) {
   const statusConfig = {
     processing: {
-      badge: 'bg-yellow-100 text-yellow-800',
+      variant: 'warning' as const,
       label: 'Processing',
-      icon: (
-        <svg className="animate-spin h-4 w-4 text-yellow-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-      ),
+      showSpinner: true,
     },
     ready: {
-      badge: 'bg-green-100 text-green-800',
+      variant: 'success' as const,
       label: 'Ready',
-      icon: (
-        <svg className="h-4 w-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-        </svg>
-      ),
+      showSpinner: false,
     },
     failed: {
-      badge: 'bg-red-100 text-red-800',
+      variant: 'error' as const,
       label: 'Failed',
-      icon: (
-        <svg className="h-4 w-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-        </svg>
-      ),
+      showSpinner: false,
     },
   }
 
@@ -43,20 +31,35 @@ function VideoItem({ id, title, status }: VideoItemProps) {
   const config = statusConfig[normalizedStatus]
 
   return (
-    <Link to={`/videos/${id}`} className="block">
-      <div className="flex items-center p-3 bg-gray-50 rounded-md hover:bg-gray-100 transition-colors">
-        <div className="w-12 h-12 bg-gray-200 rounded mr-3 flex items-center justify-center">
-          <span className="text-gray-400 text-lg">📹</span>
+    <Link to={`/videos/${id}`} className="block group">
+      <div className="flex items-center gap-3 p-3 rounded-xl border border-app-border bg-white hover:border-brand-200 hover:bg-brand-50/30 transition-all">
+        {/* Video thumbnail placeholder */}
+        <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-brand-100 transition-colors">
+          <svg className="w-5 h-5 text-gray-400 group-hover:text-brand-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
         </div>
+
+        {/* Video info */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-700 truncate">{title}</p>
-          <div className="flex items-center mt-1">
-            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${config.badge}`}>
-              <span className="mr-1">{config.icon}</span>
+          <p className="font-medium text-gray-900 truncate group-hover:text-brand-700 transition-colors">
+            {title}
+          </p>
+          <div className="flex items-center gap-2 mt-1">
+            <Badge variant={config.variant} size="sm">
+              {config.showSpinner && (
+                <Spinner size="xs" className="mr-1" />
+              )}
               {config.label}
-            </span>
+            </Badge>
           </div>
         </div>
+
+        {/* Arrow indicator */}
+        <svg className="w-5 h-5 text-gray-300 group-hover:text-brand-500 transition-colors flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+        </svg>
       </div>
     </Link>
   )

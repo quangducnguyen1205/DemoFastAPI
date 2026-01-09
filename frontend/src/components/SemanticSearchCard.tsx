@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import axiosClient from '../api/axiosClient'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, Button, Input, Badge } from './ui'
 
 interface SearchResult {
   video_id: number
@@ -68,128 +69,109 @@ function SemanticSearchCard({ ownerId }: SemanticSearchCardProps) {
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 md:col-span-2 lg:col-span-1">
-      <h2 className="text-xl font-semibold text-gray-800 mb-4">Semantic Search</h2>
-      
-      <div className="space-y-4">
-        {/* Search Input */}
-        <div>
-          <input
+    <Card className="md:col-span-2 lg:col-span-1">
+      <CardHeader>
+        <CardTitle>Semantic Search</CardTitle>
+        <CardDescription>Find moments in your videos</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          {/* Search Input */}
+          <Input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search your video content..."
             disabled={loading}
-            className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:cursor-not-allowed"
+            leftIcon={
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            }
           />
-        </div>
 
-        {/* Search Button */}
-        <button
-          onClick={handleSearch}
-          disabled={loading || !query.trim()}
-          className="w-full px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-        >
-          {loading ? (
-            <>
-              <svg
-                className="animate-spin h-4 w-4 mr-2"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                ></circle>
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                ></path>
-              </svg>
-              Searching...
-            </>
-          ) : (
-            <>
-              <svg
-                className="h-4 w-4 mr-2"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-              Search
-            </>
+          {/* Search Button */}
+          <Button
+            onClick={handleSearch}
+            disabled={!query.trim()}
+            loading={loading}
+            className="w-full"
+          >
+            Search
+          </Button>
+
+          {/* Error State */}
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl">
+              <p className="text-sm text-red-600 flex items-center gap-2">
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {error}
+              </p>
+            </div>
           )}
-        </button>
 
-        {/* Error State */}
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-md">
-            <p className="text-sm text-red-600">{error}</p>
-          </div>
-        )}
+          {/* Results */}
+          {hasSearched && !loading && !error && (
+            <div>
+              {results.length === 0 ? (
+                <div className="text-center py-6 bg-gray-50 rounded-xl border border-app-border">
+                  <div className="w-12 h-12 bg-gray-100 rounded-xl mx-auto mb-3 flex items-center justify-center">
+                    <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </div>
+                  <p className="text-sm font-medium text-gray-900 mb-1">No results found</p>
+                  <p className="text-xs text-app-muted">Try a different search query</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-app-muted">
+                    {results.length} result{results.length !== 1 ? 's' : ''} found
+                  </p>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {results.map((result) => (
+                      <Link
+                        key={result.video_id}
+                        to={`/videos/${result.video_id}`}
+                        className="block p-3 rounded-xl border border-app-border bg-white hover:border-brand-200 hover:bg-brand-50/30 transition-all group"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-900 truncate group-hover:text-brand-700 transition-colors">
+                              {result.title}
+                            </p>
+                            {result.path && (
+                              <p className="text-xs text-app-muted mt-1 line-clamp-2">
+                                {truncateText(result.path, 120)}
+                              </p>
+                            )}
+                          </div>
+                          <Badge variant="info" size="sm" className="flex-shrink-0">
+                            {(result.similarity_score * 100).toFixed(1)}%
+                          </Badge>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
-        {/* Results */}
-        {hasSearched && !loading && !error && (
-          <div className="mt-4">
-            {results.length === 0 ? (
-              <div className="text-center py-4">
-                <p className="text-sm text-gray-500">No results found for "{query}"</p>
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                <p className="text-xs text-gray-500 mb-2">
-                  {results.length} result{results.length !== 1 ? 's' : ''} found
-                </p>
-                {results.map((result) => (
-                  <Link
-                    key={result.video_id}
-                    to={`/videos/${result.video_id}`}
-                    className="block p-3 bg-gray-50 rounded-md hover:bg-gray-100 transition-colors"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0 mr-2">
-                        <p className="text-sm font-medium text-gray-800 truncate">
-                          {result.title}
-                        </p>
-                        {result.path && (
-                          <p className="text-xs text-gray-500 mt-1">
-                            {truncateText(result.path, 120)}
-                          </p>
-                        )}
-                      </div>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 flex-shrink-0">
-                        {result.similarity_score.toFixed(3)}
-                      </span>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Help Text */}
-        {!hasSearched && (
-          <p className="text-sm text-gray-500 text-center">
-            Search through your video transcripts using natural language
-          </p>
-        )}
-      </div>
-    </div>
+          {/* Help Text */}
+          {!hasSearched && (
+            <div className="text-center py-4">
+              <p className="text-sm text-app-muted">
+                Search through your video transcripts using natural language
+              </p>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 

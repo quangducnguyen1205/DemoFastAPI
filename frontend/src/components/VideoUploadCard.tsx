@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import axiosClient from '../api/axiosClient'
 import { useAuth } from '../context/AuthContext'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, Button, Input } from './ui'
 
 interface UploadStartedData {
   taskId: string
@@ -18,6 +19,7 @@ function VideoUploadCard({ onUploadStarted }: VideoUploadCardProps) {
   const [uploading, setUploading] = useState(false)
   const [success, setSuccess] = useState('')
   const [error, setError] = useState('')
+  const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { user } = useAuth()
@@ -28,6 +30,29 @@ function VideoUploadCard({ onUploadStarted }: VideoUploadCardProps) {
       setFile(selectedFile)
       setError('')
       setSuccess('')
+    }
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    const droppedFile = e.dataTransfer.files?.[0]
+    if (droppedFile && droppedFile.type.startsWith('video/')) {
+      setFile(droppedFile)
+      setError('')
+      setSuccess('')
+    } else {
+      setError('Please drop a valid video file.')
     }
   }
 
@@ -94,88 +119,114 @@ function VideoUploadCard({ onUploadStarted }: VideoUploadCardProps) {
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-      <h2 className="text-xl font-semibold text-gray-800 mb-4">Upload Video</h2>
-      
-      {success && (
-        <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded-md text-sm">
-          {success}
-        </div>
-      )}
-      
-      {error && (
-        <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-md text-sm">
-          {error}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* File Input */}
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-          <div className="text-gray-400 mb-2">
-            <svg
-              className="mx-auto h-10 w-10"
-              stroke="currentColor"
-              fill="none"
-              viewBox="0 0 48 48"
-              aria-hidden="true"
-            >
-              <path
-                d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
+    <Card>
+      <CardHeader>
+        <CardTitle>Upload Video</CardTitle>
+        <CardDescription>Add a new video to transcribe</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {success && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded-xl text-sm flex items-start gap-2">
+            <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
             </svg>
+            {success}
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="video/*"
-            onChange={handleFileChange}
-            disabled={uploading}
-            className="hidden"
-            id="video-file-input"
-          />
-          <label
-            htmlFor="video-file-input"
-            className={`cursor-pointer text-sm ${uploading ? 'text-gray-400' : 'text-blue-600 hover:text-blue-700'}`}
-          >
-            {file ? file.name : 'Click to select a video file'}
-          </label>
-          {file && (
-            <p className="text-xs text-gray-400 mt-1">
-              {(file.size / (1024 * 1024)).toFixed(2)} MB
-            </p>
-          )}
-        </div>
+        )}
+        
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm flex items-start gap-2">
+            <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {error}
+          </div>
+        )}
 
-        {/* Title Input */}
-        <div>
-          <label htmlFor="video-title" className="block text-sm font-medium text-gray-700 mb-1">
-            Video Title
-          </label>
-          <input
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Dropzone */}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`
+              relative border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer
+              ${isDragOver 
+                ? 'border-brand-400 bg-brand-50' 
+                : file 
+                  ? 'border-green-300 bg-green-50' 
+                  : 'border-app-border hover:border-brand-300 hover:bg-gray-50'
+              }
+              ${uploading ? 'opacity-50 pointer-events-none' : ''}
+            `}
+            onClick={() => !uploading && fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/*"
+              onChange={handleFileChange}
+              disabled={uploading}
+              className="hidden"
+              id="video-file-input"
+            />
+            
+            {file ? (
+              <div className="space-y-2">
+                <div className="w-12 h-12 bg-green-100 rounded-xl mx-auto flex items-center justify-center">
+                  <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <p className="font-medium text-gray-900 truncate px-4">{file.name}</p>
+                <p className="text-sm text-app-muted">
+                  {(file.size / (1024 * 1024)).toFixed(2)} MB
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="w-12 h-12 bg-gray-100 rounded-xl mx-auto flex items-center justify-center">
+                  <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                </div>
+                <p className="font-medium text-gray-900">
+                  Drop your video here
+                </p>
+                <p className="text-sm text-app-muted">
+                  or <span className="text-brand-600">browse</span> to upload
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Format hint */}
+          <p className="text-xs text-app-muted text-center">
+            Supports MP4, MOV, AVI, and other common formats
+          </p>
+
+          {/* Title Input */}
+          <Input
+            label="Video Title"
             type="text"
-            id="video-title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Enter video title"
+            placeholder="Enter a descriptive title"
             disabled={uploading}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:cursor-not-allowed"
           />
-        </div>
 
-        {/* Submit Button */}
-        <button
-          type="submit"
-          disabled={uploading || !file || !title.trim()}
-          className="w-full px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {uploading ? 'Uploading...' : 'Upload Video'}
-        </button>
-      </form>
-    </div>
+          {/* Submit Button */}
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={!file || !title.trim()}
+            loading={uploading}
+          >
+            Upload Video
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   )
 }
 
