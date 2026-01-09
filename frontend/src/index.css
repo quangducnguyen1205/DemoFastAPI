@@ -2,10 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-gray-100 min-h-screen font-sans text-gray-900 antialiased;
-}
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
 
-#root {
-  @apply min-h-screen flex flex-col;
+  body {
+    @apply bg-app-bg min-h-screen font-sans text-gray-900;
+  }
+
+  #root {
+    @apply min-h-screen flex flex-col;
+  }
 }
