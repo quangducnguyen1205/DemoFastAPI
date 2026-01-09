@@ -166,7 +166,7 @@ async def get_task_status(task_id: str):
     return await run_in_threadpool(_sync_get_task_status)
 
 # List videos
-@router.get("/", response_model=List[VideoRead])
+@router.get("", response_model=List[VideoRead])
 async def list_videos(skip: int = 0, limit: int = 100, owner_id: int | None = None, db: Session = Depends(get_db)):
     def _sync_list_videos():
         query = db.query(models.Video)
