@@ -1,13 +1,13 @@
 import os
 import subprocess
-import tempfile
 import logging
+import threading
 from typing import List
 
 from sqlalchemy.orm import Session
 
 from app import models
-from app.services.semantic_index import generate_embedding
+from app.services.semantic_index import generate_embeddings
 from app.services.semantic_index.writer import (
     load_or_create_index,
     add_embeddings,
@@ -15,11 +15,24 @@ from app.services.semantic_index.writer import (
 )
 from app.utils import split_transcript_text
 
+logger = logging.getLogger(__name__)
+_whisper_model = None
+_whisper_model_lock = threading.Lock()
 
-def extract_audio_to_wav(abs_video_path: str, sample_rate: int = 16000) -> str:
+
+def get_whisper_model(model_name: str = "base"):
+    global _whisper_model
+    if _whisper_model is None:
+        with _whisper_model_lock:
+            if _whisper_model is None:
+                import whisper  # heavy import; keep inside a worker process
+                _whisper_model = whisper.load_model(model_name)
+    return _whisper_model
+
+
+def extract_audio_to_wav(abs_video_path: str, temp_dir: str, sample_rate: int = 16000) -> str:
     """Extract mono WAV audio from a video to a temp file and return the path."""
-    tmpdir = tempfile.mkdtemp(prefix="vp_")
-    audio_path = os.path.join(tmpdir, "audio.wav")
+    audio_path = os.path.join(temp_dir, "audio.wav")
     cmd = [
         "ffmpeg", "-y", "-i", abs_video_path,
         "-vn", "-ac", "1", "-ar", str(sample_rate), audio_path
@@ -31,12 +44,11 @@ def extract_audio_to_wav(abs_video_path: str, sample_rate: int = 16000) -> str:
 def transcribe_audio_with_whisper(audio_path: str) -> str | None:
     """Transcribe audio using Whisper (base model). Returns full text or None."""
     try:
-        import whisper  # heavy import; keep inside a worker process
-        model = whisper.load_model("base")
+        model = get_whisper_model()
         result = model.transcribe(audio_path)
         return (result.get("text", "") or "").strip() or None
     except Exception as e:
-        logging.warning(f"Whisper transcription failed: {e}")
+        logger.warning("Whisper transcription failed: %s", e)
         return None
 
 
@@ -55,10 +67,8 @@ def embed_and_update_faiss(segments: List[str], video_id: int) -> None:
 
     if not segments:
         return
-    embeddings = [generate_embedding(seg) for seg in segments]
-    vecs = np.array(embeddings, dtype="float32")
+    vecs = np.array(generate_embeddings(segments), dtype="float32")
     dim = vecs.shape[1]
     load_or_create_index(dim)
     add_embeddings(vecs, [video_id] * len(segments))
     save_index()
-

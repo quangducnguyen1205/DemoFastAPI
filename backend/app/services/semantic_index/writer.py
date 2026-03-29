@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import os
 import pickle
+import time
 from typing import Iterable, List
 
 import numpy as np  # type: ignore
@@ -11,6 +13,7 @@ from . import FAISS_INDEX_PATH, FAISS_MAPPING_PATH
 _index = None
 _faiss = None
 _mapping = None  # Dict[int, int]
+logger = logging.getLogger(__name__)
 
 
 def _get_faiss():
@@ -21,13 +24,41 @@ def _get_faiss():
     return _faiss
 
 
+def _move_unreadable_file_aside(path: str, *, label: str) -> None:
+    if not os.path.exists(path):
+        return
+
+    timestamp = int(time.time())
+    backup_path = f"{path}.unreadable.{timestamp}"
+    candidate = backup_path
+    suffix = 1
+    while os.path.exists(candidate):
+        candidate = f"{backup_path}.{suffix}"
+        suffix += 1
+
+    try:
+        os.replace(path, candidate)
+        logger.warning("Moved unreadable %s from %s to %s", label, path, candidate)
+    except OSError as exc:
+        logger.warning("Failed to move unreadable %s at %s aside: %s", label, path, exc)
+
+
 def _load_mapping() -> dict[int, int]:
     global _mapping
     if _mapping is not None:
         return _mapping
     if os.path.exists(FAISS_MAPPING_PATH):
-        with open(FAISS_MAPPING_PATH, "rb") as f:
-            _mapping = pickle.load(f)
+        try:
+            with open(FAISS_MAPPING_PATH, "rb") as f:
+                _mapping = pickle.load(f)
+        except (OSError, EOFError, pickle.PickleError, AttributeError, ValueError) as exc:
+            logger.warning(
+                "Failed to load FAISS mapping from %s: %s. Recreating an empty mapping.",
+                FAISS_MAPPING_PATH,
+                exc,
+            )
+            _move_unreadable_file_aside(FAISS_MAPPING_PATH, label="FAISS mapping")
+            _mapping = {}
     else:
         _mapping = {}
     return _mapping
@@ -49,7 +80,16 @@ def load_or_create_index(dim: int):
         return _index
 
     if os.path.exists(FAISS_INDEX_PATH):
-        _index = faiss.read_index(FAISS_INDEX_PATH)
+        try:
+            _index = faiss.read_index(FAISS_INDEX_PATH)
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.warning(
+                "Failed to load FAISS index from %s: %s. Recreating an empty index.",
+                FAISS_INDEX_PATH,
+                exc,
+            )
+            _move_unreadable_file_aside(FAISS_INDEX_PATH, label="FAISS index")
+            _index = faiss.IndexFlatL2(dim)
     else:
         _index = faiss.IndexFlatL2(dim)
     return _index

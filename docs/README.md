@@ -37,6 +37,7 @@ The API surface is intentionally small: a root + health probe, minimal user CRUD
    docker compose up --build
    ```
    Starts Postgres, Redis, the FastAPI `backend`, and the Celery `worker`. Ports exposed: `8000` (API), `5432` (db), `6379` (Redis).
+   The backend and worker now share one built Python runtime image, so Compose no longer exports two separate heavyweight ML images for the same app code.
 4. **Explore the API**
    - Health: `curl http://localhost:8000/health`
    - Swagger: http://localhost:8000/docs
@@ -51,12 +52,14 @@ Stop everything with `docker compose down`. Add `-v` to drop local database and 
 1. **Upload** — POST `/videos/upload` with multipart form data (`file`, `title`, optional `owner_id`). The endpoint saves the binary to `MEDIA_ROOT/videos/`, writes a `Video` row with `status="processing"`, and emits a Celery task ID.
 2. **Celery Worker** — The worker receives `(video_id, absolute_path)` and performs:
    - audio extraction with ffmpeg
-   - transcription via Whisper
+   - transcription via a process-local cached Whisper model
    - transcript segmentation + persistence
-   - embedding generation (sentence-transformers)
+   - batched embedding generation (sentence-transformers)
    - FAISS index + mapping updates
    - final status update (`ready` or `failed`)
+   - lightweight timing logs for the major hot-path stages
 3. **Threadpool Façade** — Even though routers are async, heavy database/file work stays synchronous and executes inside `run_in_threadpool`, keeping the FastAPI event loop responsive.
+4. **Contract Stability** — This internal performance pass preserves the existing HTTP contract for `POST /videos/upload`, `GET /videos/tasks/{task_id}`, `GET /videos/{video_id}`, and `GET /videos/{video_id}/transcript`.
 
 Use this cURL snippet after the stack is running:
 ```bash
@@ -114,6 +117,7 @@ Integration coverage lives in `tests/test_app_integration.py` and exercises the 
 docker compose run --rm test
 ```
 Pytest is configured with `addopts = tests/test_app_integration.py`, so only that file executes by default. Legacy unit tests remain in the repository for reference.
+The production/runtime image stays leaner by leaving pytest/httpx/pytest-asyncio in the dedicated Docker `test` target instead of the main backend/worker image.
 
 ---
 

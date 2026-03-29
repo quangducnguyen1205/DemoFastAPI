@@ -25,3 +25,10 @@ def get_sentence_embedding_model() -> Any:
 def generate_embedding(text: str):
     model = get_sentence_embedding_model()
     return model.encode([text])[0]
+
+
+def generate_embeddings(texts: list[str]):
+    if not texts:
+        return []
+    model = get_sentence_embedding_model()
+    return model.encode(texts)

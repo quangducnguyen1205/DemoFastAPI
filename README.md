@@ -7,9 +7,9 @@ FastAPI backend integrating PostgreSQL, Redis, Celery, Whisper transcription, se
 - User management (CRUD)
 - Video upload endpoint with background Celery task
 - FFMPEG audio extraction
-- Whisper transcription (worker only; mocked in tests)
+- Whisper transcription (worker only; model reused per worker process and mocked in tests)
 - Transcript segmentation + persistence
-- Embedding generation (sentence-transformers) + FAISS index storage
+- Batched embedding generation (sentence-transformers) + FAISS index storage
 - Semantic search endpoint grouping results per video
 - Task status polling (`/videos/tasks/{task_id}`)
 
@@ -17,10 +17,10 @@ FastAPI backend integrating PostgreSQL, Redis, Celery, Whisper transcription, se
 | Service | Purpose |
 |---------|---------|
 | backend | FastAPI app (REST + search + enqueue tasks) |
-| worker  | Celery worker (transcoding, transcription, embeddings, FAISS) |
+| worker  | Celery worker (transcoding, transcription, embeddings, FAISS) using the same Python app image as `backend` |
 | db      | PostgreSQL (runtime persistence) |
 | redis   | Celery broker/result backend (prod/dev) |
-| test    | Ephemeral test runner (SQLite + memory broker) |
+| test    | Ephemeral test runner (SQLite + memory broker) built from the dedicated `test` Docker target |
 
 Media + FAISS artifacts live under `backend/app/media` (mounted into both backend & worker). Test service uses an isolated path inside its container.
 
@@ -34,7 +34,7 @@ backend/
       celery_app.py        # Central Celery instance
     models/                # user.py, video.py, transcript.py
     routers/               # users.py, videos.py
-    services/              # video_processing.py, semantic_index.py
+    services/              # video_processing.py, semantic_index/ helpers
     tasks/                 # video_tasks.py (process_video)
     schemas/               # Pydantic response/request models
     config/settings.py     # Environment-driven settings
@@ -54,6 +54,10 @@ docker compose run --rm test
 Rebuild test image (e.g., after dependency change):
 ```bash
 docker compose build test
+```
+Use an alternate env file when the default `.env` is unavailable:
+```bash
+APP_ENV_FILE=.env.example docker compose build backend
 ```
 
 ---
@@ -85,6 +89,7 @@ Dedicated `test` service runs the suite with:
 - SQLite in‑memory DB (`sqlite+pysqlite:///:memory:`) + SQLAlchemy StaticPool so tables persist across sessions
 - Celery memory broker/result backend (no Redis needed)
 - ML + FAISS heavy operations mocked in specific tests (search, upload) for speed
+- Runtime images avoid installing pytest/httpx/pytest-asyncio; those stay in the `test` target only
 
 Run tests:
 ```bash
@@ -106,6 +111,13 @@ docker compose run --rm test pytest tests/test_users.py -q
 - `app/main.py` lifespan ensures tables are created at startup (includes model imports first).
 - `app/core/database.py` adapts engine for in‑memory SQLite (StaticPool + `check_same_thread=False`).
 - FAISS index + mapping persisted in `media/`; tests isolate by using a temporary media root path.
+- Uploads are streamed to disk instead of buffering the full file into memory first.
+- Worker hot-path logs include lightweight timings for upload, ffmpeg, Whisper, chunking, transcript persistence, embeddings, FAISS writes, and total task time.
+- If existing FAISS index/mapping files on the shared media mount are unreadable placeholder artifacts, the runtime recreates them instead of failing every new task.
+- Docker Compose now runs the Celery worker conservatively by default (`concurrency=1`, prefetch multiplier `1`) to avoid ML-related memory spikes.
+- Backend and worker now reuse the same heavy Python app image, while the Docker `test` target layers test-only dependencies on top separately.
+- `backend/.dockerignore` keeps media outputs, caches, and local database artifacts out of the Python build context.
+- Local Docker source mounts now target `/backend`, matching the image `WORKDIR`, so backend and worker pick up the mounted code path consistently.
 
 ---
 Concise, production‑leaning FastAPI skeleton with async processing + semantic search—ready to extend.

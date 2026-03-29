@@ -2,6 +2,8 @@
 
 This document describes the currently supported REST API for the Video Similarity Search backend. All endpoints are served from the FastAPI app inside `docker compose` on port `8000`.
 
+The current internal performance refactor preserves the existing endpoint paths, HTTP methods, and request/response shapes used by downstream services. The changes are limited to upload/worker internals such as streaming file writes, worker-side model reuse, batched embeddings, timing logs, and conservative Celery tuning.
+
 ## Base URL
 
 ```
@@ -95,7 +97,8 @@ Authentication is not yet enforced; all routes are publicly accessible in develo
 - **Background Processing:**
   1. File saved under `MEDIA_ROOT/videos/` with a UUID filename.
   2. Database row created with `status="processing"` and optional `owner_id`.
-  3. Celery task `process_video_task` receives `(video_id, absolute_path)` to run Whisper, segment transcripts, generate embeddings, and update the FAISS index.
+3. Celery task `process_video_task` receives `(video_id, absolute_path)` to run Whisper, segment transcripts, generate embeddings, and update the FAISS index.
+   Internal implementation details such as streaming file saves, process-local Whisper reuse, batched embedding calls, and worker timing logs do not change this contract.
 
 ### GET `/videos/tasks/{task_id}`
 - **Purpose:** Poll Celery for task status that was returned from `/videos/upload`.

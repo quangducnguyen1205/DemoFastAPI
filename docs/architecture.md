@@ -81,12 +81,13 @@ Benefits:
 3. Celery task `process_video_task.delay(video_id, abs_path)` queues work through Redis.
 4. Worker pipeline:
    - Extract audio via ffmpeg.
-   - Transcribe with Whisper.
+   - Transcribe with a process-local cached Whisper model.
    - Segment transcript text.
    - Persist transcript rows in PostgreSQL.
-   - Generate embeddings with sentence-transformers.
+   - Generate transcript embeddings in a single batch with sentence-transformers.
    - Update FAISS index (`faiss_index.faiss`) and mapping (`faiss_mapping.pkl`).
    - Set the video `status` to `ready` or `failed`.
+   - Emit concise timing logs for the major stages (`ffmpeg_ms`, `whisper_ms`, `chunking_ms`, `transcript_persist_ms`, `embedding_ms`, `faiss_write_ms`, `total_task_ms`).
 
 Clients poll `GET /videos/tasks/{task_id}` and optionally fetch the updated video record once status flips to `ready`.
 
@@ -112,7 +113,7 @@ Clients poll `GET /videos/tasks/{task_id}` and optionally fetch the updated vide
 |-------|----------------|-------|
 | Celery broker | Redis | Transports messages between API uploads and workers. |
 | Celery worker | `process_video_task` | Includes error handling and DB session management; failures mark the video as `failed` and bubble a short message back to `/videos/tasks/{task_id}`. |
-| FAISS writer | `app/services/semantic_index/writer.py` (invoked from the worker) | Adds new vectors, persists both index and mapping synchronously to avoid corruption. |
+| FAISS writer | `app/services/semantic_index/writer.py` (invoked from the worker) | Adds new vectors, persists both index and mapping synchronously, and now receives batched segment embeddings from the worker. |
 | FAISS reader | `app/services/semantic_index/reader.py` (used by FastAPI) | Lazily loads the index, caches it in-memory, and only performs read/search operations. |
 
 Because writes happen only inside the worker, the API server can safely cache the FAISS index without dealing with concurrent writes. If a worker updates the files, the process can be restarted (or cache invalidated manually) to pick up the latest vectors.
@@ -145,7 +146,7 @@ This approach keeps the FAISS index global (single vector space) but lets client
 
 - **API layer**: stateless; scale horizontally by running multiple `backend` containers behind a load balancer.
 - **Threadpool size**: FastAPI inherits the default `anyio.to_thread` pool; tune via Uvicorn settings if uploads compete with heavy synchronous queries.
-- **Worker count**: scale `worker` services independently (each requires Whisper + embedding model downloads). CPU is the main bottleneck.
+- **Worker count**: Docker Compose now defaults the worker to `--concurrency=1` with Celery prefetch multiplier `1` because Whisper + embeddings are memory-heavy. Increase deliberately if you have measured spare RAM/CPU.
 - **Storage**: mount `MEDIA_ROOT` on persistent storage. The FAISS index and mapping live next to the uploads so snapshots/backups capture both.
 - **Cache invalidation**: restart FastAPI containers after major FAISS updates to reload the cached index, or extend the reader to detect newer timestamps.
 - **Future auth**: planned enhancements include authentication/authorization layers and admin-only routers (see `docs/future_work.md`).
