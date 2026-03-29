@@ -33,6 +33,13 @@ def generate_embedding(text: str):
     return model.encode([text])[0]
 
 
+def generate_embeddings(texts: list[str]):
+    if not texts:
+        return []
+    model = get_sentence_embedding_model()
+    return model.encode(texts)
+
+
 def load_faiss_index(dimension: int):
     import faiss  # type: ignore
     if os.path.exists(FAISS_INDEX_PATH):

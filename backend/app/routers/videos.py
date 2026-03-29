@@ -4,6 +4,8 @@ import os
 import uuid
 import logging
 import pickle
+import shutil
+import time
 
 from sqlalchemy.orm import Session
 from typing import List
@@ -18,6 +20,8 @@ from app.services.semantic_index import generate_embedding
 from app.services.semantic_index.reader import load_index_if_exists, search_vector
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+timing_logger = logging.getLogger("uvicorn.error")
 
 MEDIA_ROOT = settings.MEDIA_ROOT
 VIDEO_DIR = settings.VIDEO_DIR
@@ -111,6 +115,8 @@ async def upload_video(
     owner_id: int | None = Form(None),
     db: Session = Depends(get_db)
 ):
+    upload_started_at = time.perf_counter()
+
     # Validate MIME type
     content_type = file.content_type or ""
     if not content_type.startswith("video/"):
@@ -126,8 +132,13 @@ async def upload_video(
         save_path = os.path.join(VIDEO_DIR, unique_name)
 
         # Persist a file to disk
+        file_save_started_at = time.perf_counter()
+        file.file.seek(0)
         with open(save_path, "wb") as out_file:
-            out_file.write(file.file.read())
+            shutil.copyfileobj(file.file, out_file, length=1024 * 1024)
+            bytes_written = out_file.tell()
+        file_save_ms = (time.perf_counter() - file_save_started_at) * 1000
+        timing_logger.info("file_save_ms=%.2f path=%s bytes=%s", file_save_ms, save_path, bytes_written)
 
         # Store relative path under the media root (e.g., "videos/<file>")
         rel_path = os.path.join(os.path.basename(settings.VIDEO_SUBDIR), unique_name) if hasattr(settings, 'VIDEO_SUBDIR') else os.path.join("videos", unique_name)
@@ -147,7 +158,10 @@ async def upload_video(
         abs_video_path = os.path.abspath(save_path)
         async_result = process_video_task.delay(db_video.id, abs_video_path)
 
-        return {"task_id": async_result.id, "status": "processing", "video_id": db_video.id}
+        response = {"task_id": async_result.id, "status": "processing", "video_id": db_video.id}
+        upload_request_ms = (time.perf_counter() - upload_started_at) * 1000
+        timing_logger.info("upload_request_ms=%.2f video_id=%s task_id=%s", upload_request_ms, db_video.id, async_result.id)
+        return response
 
     return await run_in_threadpool(_sync_upload_video)
 

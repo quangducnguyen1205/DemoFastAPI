@@ -39,6 +39,7 @@ Install Docker + Compose per your platform (Docker Desktop includes both). Add y
    ```bash
    cp .env.example .env
    ```
+   If you need to point Compose at a different env file for troubleshooting, set `APP_ENV_FILE=/path/to/file.env` before `docker compose ...`.
 
 3. **Adjust only if needed**
    - `DATABASE_URL=postgresql://postgres:postgres@db:5432/userdb`
@@ -46,6 +47,8 @@ Install Docker + Compose per your platform (Docker Desktop includes both). Add y
    - `MEDIA_ROOT=/app/media` (mounted volume)
    - `FAISS_INDEX_PATH=/app/media/faiss_index.faiss`
    - `FAISS_MAPPING_PATH=/app/media/faiss_mapping.pkl`
+   - `CELERY_WORKER_CONCURRENCY=1`
+   - `CELERY_WORKER_PREFETCH_MULTIPLIER=1`
 
 The defaults match the compose service names (`db`, `redis`, `backend`, `worker`).
 
@@ -57,6 +60,7 @@ The defaults match the compose service names (`db`, `redis`, `backend`, `worker`
    ```bash
    docker compose build
    ```
+   Compose now builds one shared Python runtime image for both `backend` and `worker`, plus a separate `test` target that layers test-only dependencies on top.
 
 2. **Start the stack**
    ```bash
@@ -67,7 +71,10 @@ The defaults match the compose service names (`db`, `redis`, `backend`, `worker`
    - `db` (PostgreSQL 15) — persists metadata
    - `redis` — Celery broker/result backend
    - `backend` — FastAPI app (port 8000)
-   - `worker` — Celery worker for Whisper/FAISS pipeline
+   - `worker` — Celery worker for Whisper/FAISS pipeline using the same Python app image as `backend`
+   In local development, both services mount the source tree at `/backend`, matching the Dockerfile `WORKDIR`, while media artifacts remain on the shared media mount.
+
+   The compose defaults are intentionally conservative for ML-heavy work: the worker runs with concurrency `1`, Celery prefetch multiplier `1`, reuses the Whisper model within each worker process, batches transcript embeddings, and emits concise timing logs for the main processing stages.
 
 3. **Observe logs**
    ```bash
@@ -106,6 +113,7 @@ The defaults match the compose service names (`db`, `redis`, `backend`, `worker`
 ## Testing the Stack
 
 The `test` service uses the same Docker image but runs pytest against a lightweight SQLite database and in-memory Celery configuration. Only the integration suite (`tests/test_app_integration.py`) executes by default via `pytest.ini`.
+Its Docker target installs pytest/httpx/pytest-asyncio separately so the runtime backend/worker image does not carry test-only Python packages.
 
 ```bash
 docker compose run --rm test
@@ -143,6 +151,7 @@ Use `docker compose down -v` to wipe Postgres/Redis/FAISS volumes when you need 
 ### FastAPI container restarts immediately
 - Run `docker compose logs backend` to view stack traces.
 - Common cause is Postgres not ready yet; the app retries table creation up to 30 times.
+- If Docker builds are still unexpectedly heavy, verify you are building with the backend-specific `.dockerignore` in place and that `docker compose build` is not trying to export separate backend/worker images.
 
 ### Tasks stay PENDING
 - Ensure the worker is running: `docker compose ps worker`.
@@ -156,6 +165,7 @@ Use `docker compose down -v` to wipe Postgres/Redis/FAISS volumes when you need 
 ### Search returns empty results
 - Video may still be processing; check `/videos/tasks/{task_id}` and the `videos.status` column.
 - Verify FAISS files exist inside the media volume (`faiss_index.faiss`, `faiss_mapping.pkl`).
+- If the shared media mount contains unreadable placeholder FAISS files (for example cloud-synced, not-fully-downloaded artifacts), the worker now moves them aside and recreates fresh index/mapping files on the next successful write.
 
 ### Port conflicts
 - Change host ports inside `docker-compose.yml`, e.g. `- "8001:8000"` under `backend`.
@@ -169,6 +179,7 @@ Use `docker compose down -v` to wipe Postgres/Redis/FAISS volumes when you need 
 - Configure HTTPS termination (e.g., Traefik or Nginx) in front of FastAPI.
 - Run multiple `backend` containers behind a load balancer; FastAPI is stateless.
 - Scale Celery workers separately for throughput; Whisper and embedding models are CPU-heavy.
+- If you increase worker concurrency, do it deliberately and watch RAM usage because each worker process maintains its own in-memory model instances.
 - Schedule periodic FAISS backups by copying the index and mapping files from the media volume.
 - Monitor queue depth (Redis), worker logs, and API latencies. Prometheus exporters can be added later.
 

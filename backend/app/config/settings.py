@@ -18,6 +18,13 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     return val if (val is not None and val != "") else default
 
 
+def _env_int(name: str, default: int) -> int:
+    val = _env(name)
+    if val is None:
+        return default
+    return int(val)
+
+
 def _is_docker() -> bool:
     # Heuristic: docker sets this file
     return Path("/.docker").exists() or _env("DOCKERIZED", "false").lower() in {"1", "true", "yes"}
@@ -39,6 +46,7 @@ class Settings:
     # Celery / Redis
     CELERY_BROKER_URL: str = _env("CELERY_BROKER_URL", "redis://localhost:6379/0")
     CELERY_RESULT_BACKEND: str = _env("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = _env_int("CELERY_WORKER_PREFETCH_MULTIPLIER", 1)
 
     # Feature flags / misc
     TOKENIZERS_PARALLELISM: str = _env("TOKENIZERS_PARALLELISM", "false")

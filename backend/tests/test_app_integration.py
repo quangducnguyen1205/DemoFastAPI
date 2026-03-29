@@ -1,5 +1,6 @@
 import io
 import pickle
+import sys
 import uuid
 
 import numpy as np
@@ -7,6 +8,10 @@ import numpy as np
 from app import models
 from app.core.database import SessionLocal
 import app.routers.videos as videos_router
+import app.services.semantic_index as semantic_index
+import app.services.semantic_index.reader as semantic_reader
+import app.services.semantic_index.writer as semantic_writer
+import app.services.video_processing as video_processing
 
 
 def _insert_video(**overrides):
@@ -147,3 +152,110 @@ def test_delete_video_flow(client):
     payload = resp.json()
     assert payload["id"] == video.id
     assert payload["message"] == "Video deleted successfully"
+
+
+def test_generate_embeddings_batches_single_encode_call(monkeypatch):
+    class FakeModel:
+        def __init__(self):
+            self.calls = []
+
+        def encode(self, texts):
+            self.calls.append(list(texts))
+            return np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+
+    fake_model = FakeModel()
+    monkeypatch.setattr(semantic_index, "_embedding_model", fake_model)
+
+    result = semantic_index.generate_embeddings(["first", "second"])
+
+    assert fake_model.calls == [["first", "second"]]
+    assert result.shape == (2, 2)
+
+
+def test_get_whisper_model_caches_per_process(monkeypatch):
+    class FakeWhisperModule:
+        def __init__(self):
+            self.calls = 0
+
+        def load_model(self, model_name):
+            self.calls += 1
+            return {"model_name": model_name}
+
+    fake_whisper = FakeWhisperModule()
+    monkeypatch.setattr(video_processing, "_whisper_model", None)
+    monkeypatch.setitem(sys.modules, "whisper", fake_whisper)
+
+    first = video_processing.get_whisper_model()
+    second = video_processing.get_whisper_model()
+
+    assert first == {"model_name": "base"}
+    assert second == first
+    assert fake_whisper.calls == 1
+
+
+def test_writer_recreates_index_when_existing_file_is_unreadable(monkeypatch, tmp_path):
+    index_path = tmp_path / "faiss_index.faiss"
+    index_path.write_bytes(b"placeholder")
+
+    class FakeIndex:
+        def __init__(self, dim):
+            self.d = dim
+
+    class FakeFaiss:
+        def read_index(self, path):
+            raise RuntimeError("Resource deadlock avoided")
+
+        def IndexFlatL2(self, dim):
+            return FakeIndex(dim)
+
+    monkeypatch.setattr(semantic_writer, "FAISS_INDEX_PATH", str(index_path))
+    monkeypatch.setattr(semantic_writer, "_faiss", FakeFaiss())
+    monkeypatch.setattr(semantic_writer, "_index", None)
+
+    index = semantic_writer.load_or_create_index(384)
+
+    assert index.d == 384
+    unreadable_backups = list(tmp_path.glob("faiss_index.faiss.unreadable.*"))
+    assert unreadable_backups
+
+
+def test_writer_recreates_mapping_when_existing_file_is_unreadable(monkeypatch, tmp_path):
+    mapping_path = tmp_path / "faiss_mapping.pkl"
+    mapping_path.write_bytes(b"placeholder")
+
+    monkeypatch.setattr(semantic_writer, "FAISS_MAPPING_PATH", str(mapping_path))
+    monkeypatch.setattr(semantic_writer, "_mapping", None)
+    monkeypatch.setattr(semantic_writer.pickle, "load", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(35, "Resource deadlock avoided")))
+
+    mapping = semantic_writer._load_mapping()
+
+    assert mapping == {}
+    unreadable_backups = list(tmp_path.glob("faiss_mapping.pkl.unreadable.*"))
+    assert unreadable_backups
+
+
+def test_reader_returns_empty_index_when_existing_file_is_unreadable(monkeypatch, tmp_path):
+    index_path = tmp_path / "faiss_index.faiss"
+    index_path.write_bytes(b"placeholder")
+
+    class FakeIndex:
+        def __init__(self, dim):
+            self.d = dim
+            self.ntotal = 0
+
+    class FakeFaiss:
+        def read_index(self, path):
+            raise RuntimeError("Resource deadlock avoided")
+
+        def IndexFlatL2(self, dim):
+            return FakeIndex(dim)
+
+    monkeypatch.setattr(semantic_reader, "FAISS_INDEX_PATH", str(index_path))
+    monkeypatch.setattr(semantic_reader, "_faiss", FakeFaiss())
+    monkeypatch.setattr(semantic_reader, "_index", None)
+
+    index = semantic_reader.load_index_if_exists(384)
+
+    assert index.d == 384
+    unreadable_backups = list(tmp_path.glob("faiss_index.faiss.unreadable.*"))
+    assert unreadable_backups
