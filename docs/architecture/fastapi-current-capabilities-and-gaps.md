@@ -30,7 +30,7 @@ Evidence: `backend/app/routers/videos.py`, `backend/app/models/video.py`
 2. The background worker loads the `Video` row, extracts mono 16 kHz WAV audio with `ffmpeg`, then calls local Whisper transcription using `whisper.load_model("base")`.  
 Evidence: `backend/app/tasks/video_tasks.py`, `backend/app/services/video_processing.py`, `backend/Dockerfile`
 
-3. If transcription returns text, that text is split by a sentence-like heuristic into chunks up to 200 characters. The splitter groups sentences ending in `.`, `!`, or `?`, and hard-wraps any overlong chunk.  
+3. If transcription returns text, that text is split into sentence-aware chunks with a default ceiling of 450 characters. The splitter groups sentence-like fragments ending in `.`, `!`, or `?`, reuses the last sentence as overlap when it still fits, and wraps overlong fragments on word boundaries instead of blind character slicing.  
 Evidence: `backend/app/tasks/video_tasks.py`, `backend/app/services/video_processing.py`, `backend/app/utils.py`
 
 4. Transcript chunks are persisted as `Transcript` rows with `video_id`, sequential `segment_index` values starting at `0`, and `text`. No timestamp fields, speaker fields, or chunk IDs are written by this code path.  
@@ -119,7 +119,7 @@ Evidence: `backend/app/main.py`
 - The current API contract already separates upload from processing completion: upload creates a durable `Video` row and returns a task handle, while task status is polled independently. That asynchronous contract is reusable even if the implementation moves away from Celery.  
 Evidence: `backend/app/routers/videos.py`, `backend/app/tasks/video_tasks.py`
 
-- The legacy system has a concrete, reproducible transcript segmentation rule: sentence-like grouping with a 200-character ceiling and sequential `segment_index`. If the Spring system needs behavioral parity for search or transcript display, this rule can be mirrored directly.  
+- The legacy system has a concrete, reproducible transcript segmentation rule: sentence-aware grouping with a 450-character ceiling, one-sentence overlap when it fits, and sequential `segment_index`. If the Spring system needs behavioral parity for search or transcript display, this rule can be mirrored directly.  
 Evidence: `backend/app/utils.py`, `backend/app/services/video_processing.py`
 
 - The current search behavior is well defined enough to replicate: embed transcript segments, store vectors in FAISS, search by query embedding, convert L2 distance to `1 / (1 + distance)`, then collapse multiple segment hits into one best score per video.  
@@ -165,7 +165,7 @@ Evidence: `backend/app/services/semantic_index.py`, `backend/app/services/semant
 
 ## 7. Unknowns that must NOT be assumed
 
-- Do not assume transcript rows correspond to time-based media segments. The only confirmed transcript ordering field is `segment_index`, and chunking is character-limited text splitting.  
+- Do not assume transcript rows correspond to time-based media segments. The only confirmed transcript ordering field is `segment_index`, and chunking is still text-based rather than timestamp-based.  
 Evidence: `backend/app/models/transcript.py`, `backend/app/utils.py`
 
 - Do not assume the search stack can trace a hit back to a specific transcript row. The confirmed FAISS mapping stores only `video_id` values, not transcript IDs or segment indices.  

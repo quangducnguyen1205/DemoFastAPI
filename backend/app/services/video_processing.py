@@ -13,7 +13,7 @@ from app.services.semantic_index.writer import (
     add_embeddings,
     save_index,
 )
-from app.utils import split_transcript_text
+from app.utils import DEFAULT_TRANSCRIPT_CHUNK_CHARS, split_transcript_text
 
 logger = logging.getLogger(__name__)
 _whisper_model = None
@@ -52,7 +52,7 @@ def transcribe_audio_with_whisper(audio_path: str) -> str | None:
         return None
 
 
-def segment_text(full_text: str, max_len: int = 200) -> List[str]:
+def segment_text(full_text: str, max_len: int = DEFAULT_TRANSCRIPT_CHUNK_CHARS) -> List[str]:
     return split_transcript_text(full_text, max_len=max_len)
 
 

@@ -97,8 +97,8 @@ Authentication is not yet enforced; all routes are publicly accessible in develo
 - **Background Processing:**
   1. File saved under `MEDIA_ROOT/videos/` with a UUID filename.
   2. Database row created with `status="processing"` and optional `owner_id`.
-3. Celery task `process_video_task` receives `(video_id, absolute_path)` to run Whisper, segment transcripts, generate embeddings, and update the FAISS index.
-   Internal implementation details such as streaming file saves, process-local Whisper reuse, batched embedding calls, and worker timing logs do not change this contract.
+3. Celery task `process_video_task` receives `(video_id, absolute_path)` to run Whisper, build sentence-aware transcript chunks, generate embeddings, and update the FAISS index.
+   Internal implementation details such as streaming file saves, process-local Whisper reuse, sentence overlap inside transcript chunking, batched embedding calls, and worker timing logs do not change this contract.
 
 ### GET `/videos/tasks/{task_id}`
 - **Purpose:** Poll Celery for task status that was returned from `/videos/upload`.

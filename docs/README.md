@@ -53,7 +53,7 @@ Stop everything with `docker compose down`. Add `-v` to drop local database and 
 2. **Celery Worker** — The worker receives `(video_id, absolute_path)` and performs:
    - audio extraction with ffmpeg
    - transcription via a process-local cached Whisper model
-   - transcript segmentation + persistence
+   - sentence-aware transcript chunking + persistence
    - batched embedding generation (sentence-transformers)
    - FAISS index + mapping updates
    - final status update (`ready` or `failed`)
@@ -112,11 +112,11 @@ If the FAISS index is empty (no processed videos yet) the endpoint returns `[]`.
 
 ## How Tests Work
 
-Integration coverage lives in `tests/test_app_integration.py` and exercises the full API surface (health, users, upload/task flow, search, delete) with strategically mocked ML/FAISS calls. Run it inside Docker:
+Integration coverage lives in `tests/test_app_integration.py`, `tests/test_full_system.py`, and `tests/test_transcript_chunking.py`. Together they cover the public API plus transcript chunk construction. Run them inside Docker:
 ```bash
 docker compose run --rm test
 ```
-Pytest is configured with `addopts = tests/test_app_integration.py`, so only that file executes by default. Legacy unit tests remain in the repository for reference.
+Pytest is configured with explicit `addopts` entries for those three files so the main API and chunking regressions run by default.
 The production/runtime image stays leaner by leaving pytest/httpx/pytest-asyncio in the dedicated Docker `test` target instead of the main backend/worker image.
 
 ---
@@ -133,4 +133,5 @@ media/              # persisted FAISS index + uploads (Docker volume)
 Refer to:
 - `docs/api_reference.md` for endpoint-level details
 - `docs/architecture.md` for design notes (async façade, Celery, FAISS)
+- `docs/transcript_chunking.md` for transcript segmentation details and rationale
 - `docs/deployment_guide.md` for ops playbooks

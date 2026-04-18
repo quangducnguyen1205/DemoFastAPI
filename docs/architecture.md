@@ -82,7 +82,7 @@ Benefits:
 4. Worker pipeline:
    - Extract audio via ffmpeg.
    - Transcribe with a process-local cached Whisper model.
-   - Segment transcript text.
+   - Build sentence-aware transcript chunks with moderate overlap.
    - Persist transcript rows in PostgreSQL.
    - Generate transcript embeddings in a single batch with sentence-transformers.
    - Update FAISS index (`faiss_index.faiss`) and mapping (`faiss_mapping.pkl`).

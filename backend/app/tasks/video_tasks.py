@@ -55,7 +55,7 @@ def process_video_task(self, video_id: int, abs_video_path: str) -> dict:
                 _log_timing("whisper_ms", (time.perf_counter() - whisper_started_at) * 1000, task_id=task_id, video_id=video_id)
 
             chunking_started_at = time.perf_counter()
-            segments = segment_text(full_text, max_len=200) if full_text else []
+            segments = segment_text(full_text) if full_text else []
             _log_timing(
                 "chunking_ms",
                 (time.perf_counter() - chunking_started_at) * 1000,
