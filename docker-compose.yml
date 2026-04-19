@@ -12,7 +12,7 @@ services:
     environment:
       PYTHONPATH: /backend
       DATABASE_URL: ${DATABASE_URL}
-      MEDIA_ROOT: ${MEDIA_ROOT:-/backend/media}
+      MEDIA_ROOT: /backend/media
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
     env_file:
@@ -47,7 +47,7 @@ services:
     environment:
       PYTHONPATH: /backend
       DATABASE_URL: ${DATABASE_URL}
-      MEDIA_ROOT: ${MEDIA_ROOT:-/backend/media}
+      MEDIA_ROOT: /backend/media
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}

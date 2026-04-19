@@ -48,5 +48,8 @@ class Settings:
     def VIDEO_DIR(self) -> str:
         return str(Path(self.MEDIA_ROOT) / self.VIDEO_SUBDIR)
 
+    def ensure_media_dirs(self) -> None:
+        Path(self.VIDEO_DIR).mkdir(parents=True, exist_ok=True)
+
 
 settings = Settings()

@@ -13,6 +13,7 @@ load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
 
 from app.routers import videos
 from app.core.database import engine, Base
+from app.config.settings import settings
 # Ensure models are imported so SQLAlchemy registers tables
 from app import models as _models  # noqa: F401
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
 
     Replaces deprecated @app.on_event('startup') / 'shutdown'.
     """
+    settings.ensure_media_dirs()
     create_tables()  # startup work
     yield            # application runs
     # (optional) add teardown / cleanup code here

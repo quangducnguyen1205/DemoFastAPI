@@ -19,9 +19,6 @@ from app.config.settings import settings
 router = APIRouter()
 timing_logger = logging.getLogger("uvicorn.error")
 
-VIDEO_DIR = settings.VIDEO_DIR
-os.makedirs(VIDEO_DIR, exist_ok=True)
-
 
 @router.post("/upload")
 async def upload_video(
@@ -41,10 +38,13 @@ async def upload_video(
         )
 
     def _sync_upload_video():
+        video_dir = settings.VIDEO_DIR
+        os.makedirs(video_dir, exist_ok=True)
+
         # Generate unique filename preserving extension
         original_ext = os.path.splitext(file.filename)[1]
         unique_name = f"{uuid.uuid4().hex}{original_ext}"
-        save_path = os.path.join(VIDEO_DIR, unique_name)
+        save_path = os.path.join(video_dir, unique_name)
 
         # Persist a file to disk
         file_save_started_at = time.perf_counter()
