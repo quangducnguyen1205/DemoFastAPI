@@ -12,12 +12,6 @@ from app.services.video_processing import (
     segment_text,
     persist_transcript_segments,
 )
-from app.services.semantic_index import generate_embeddings
-from app.services.semantic_index.writer import (
-    load_or_create_index,
-    add_embeddings,
-    save_index,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -74,35 +68,8 @@ def process_video_task(self, video_id: int, abs_video_path: str) -> dict:
                     video_id=video_id,
                     segment_count=len(segments),
                 )
-
-                # Embed and write via writer API
-                import numpy as np
-                embedding_started_at = time.perf_counter()
-                vecs = np.array(generate_embeddings(segments), dtype="float32")
-                _log_timing(
-                    "embedding_ms",
-                    (time.perf_counter() - embedding_started_at) * 1000,
-                    task_id=task_id,
-                    video_id=video_id,
-                    segment_count=len(segments),
-                )
-
-                dim = vecs.shape[1]
-                faiss_started_at = time.perf_counter()
-                load_or_create_index(dim)
-                add_embeddings(vecs, [video.id] * len(segments))
-                save_index()
-                _log_timing(
-                    "faiss_write_ms",
-                    (time.perf_counter() - faiss_started_at) * 1000,
-                    task_id=task_id,
-                    video_id=video_id,
-                    segment_count=len(segments),
-                )
             else:
                 _log_timing("transcript_persist_ms", 0.0, task_id=task_id, video_id=video_id, segment_count=0)
-                _log_timing("embedding_ms", 0.0, task_id=task_id, video_id=video_id, segment_count=0)
-                _log_timing("faiss_write_ms", 0.0, task_id=task_id, video_id=video_id, segment_count=0)
 
             video.status = "ready"
             db.commit()

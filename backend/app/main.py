@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 # Load environment variables from .env as early as possible
 load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
 
-from app.routers import users, videos, auth
+from app.routers import videos
 from app.core.database import engine, Base
 # Ensure models are imported so SQLAlchemy registers tables
 from app import models as _models  # noqa: F401
@@ -45,8 +45,8 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app with lifespan handler
 app = FastAPI(
-    title="User Management API",
-    description="A FastAPI application for managing users with PostgresSQL",
+    title="AI Knowledge Workspace Processing Service",
+    description="Internal processing service for upload, transcription, task tracking, and transcript retrieval.",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -62,16 +62,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(videos.router, prefix="/videos", tags=["videos"])
 
 # Root endpoint
 @app.get("/")
 def read_root():
     return {
-        "message": "Welcome to User Management API",
+        "message": "AI Knowledge Workspace Processing Service",
         "docs": "/docs",
         "redoc": "/redoc"
     }

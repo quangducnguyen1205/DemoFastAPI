@@ -1,14 +1,4 @@
 services:
-  # frontend:
-  #   build: ./frontend
-  #   ports:
-  #     - "5173:5173"
-  #   depends_on:
-  #     - backend
-  #   volumes:
-  #     - ./frontend:/app
-  #     - /app/node_modules
-
   backend:
     image: demofirstbackend-python:latest
     build:
@@ -22,16 +12,14 @@ services:
     environment:
       PYTHONPATH: /backend
       DATABASE_URL: ${DATABASE_URL}
-      MEDIA_ROOT: ${MEDIA_ROOT:-media}
-      FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-}
-      FAISS_MAPPING_PATH: ${FAISS_MAPPING_PATH:-}
+      MEDIA_ROOT: ${MEDIA_ROOT:-/backend/media}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
     env_file:
       - ${APP_ENV_FILE:-.env}
     volumes:
       - ./backend:/backend
-      - ./backend/app/media:/app/media
+      - ./backend/media:/backend/media
 
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 
 
@@ -59,9 +47,7 @@ services:
     environment:
       PYTHONPATH: /backend
       DATABASE_URL: ${DATABASE_URL}
-      MEDIA_ROOT: ${MEDIA_ROOT:-media}
-      FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-}
-      FAISS_MAPPING_PATH: ${FAISS_MAPPING_PATH:-}
+      MEDIA_ROOT: ${MEDIA_ROOT:-/backend/media}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
@@ -69,7 +55,7 @@ services:
       - ${APP_ENV_FILE:-.env}
     volumes:
       - ./backend:/backend
-      - ./backend/app/media:/app/media
+      - ./backend/media:/backend/media
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-1}
 
   test:
@@ -82,7 +68,6 @@ services:
       CELERY_BROKER_URL: "memory://"
       CELERY_RESULT_BACKEND: "cache+memory://"
       MEDIA_ROOT: "/backend/test_media"
-      TOKENIZERS_PARALLELISM: "false"
     # No volumes to avoid macOS FS lock issues; use image filesystem
     command: sh -c "PYTHONPATH=. pytest -v --assert=plain"
     # No dependencies; pure in-container test harness

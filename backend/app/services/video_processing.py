@@ -7,12 +7,6 @@ from typing import List
 from sqlalchemy.orm import Session
 
 from app import models
-from app.services.semantic_index import generate_embeddings
-from app.services.semantic_index.writer import (
-    load_or_create_index,
-    add_embeddings,
-    save_index,
-)
 from app.utils import DEFAULT_TRANSCRIPT_CHUNK_CHARS, split_transcript_text
 
 logger = logging.getLogger(__name__)
@@ -60,15 +54,3 @@ def persist_transcript_segments(db: Session, video_id: int, segments: List[str])
     for idx, seg in enumerate(segments):
         db.add(models.Transcript(video_id=video_id, segment_index=idx, text=seg))
     db.commit()
-
-
-def embed_and_update_faiss(segments: List[str], video_id: int) -> None:
-    import numpy as np
-
-    if not segments:
-        return
-    vecs = np.array(generate_embeddings(segments), dtype="float32")
-    dim = vecs.shape[1]
-    load_or_create_index(dim)
-    add_embeddings(vecs, [video_id] * len(segments))
-    save_index()
