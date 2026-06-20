@@ -58,20 +58,5 @@ services:
       - ./backend/media:/backend/media
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-1}
 
-  test:
-    build:
-      context: ./backend
-      target: test
-    environment:
-      PYTHONPATH: /backend
-      DATABASE_URL: "sqlite:///./test.db"
-      CELERY_BROKER_URL: "memory://"
-      CELERY_RESULT_BACKEND: "cache+memory://"
-      MEDIA_ROOT: "/backend/test_media"
-    # No volumes to avoid macOS FS lock issues; use image filesystem
-    command: sh -c "PYTHONPATH=. pytest -v --assert=plain"
-    # No dependencies; pure in-container test harness
-    profiles: [test]
-
 volumes:
   postgres_data:

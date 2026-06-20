@@ -4,7 +4,6 @@ COMPOSE = $(DOCKER) compose $(if $(COMPOSE_FILE),-f $(COMPOSE_FILE),)
 
 BACKEND_SERVICE ?= backend
 WORKER_SERVICE ?= worker
-TEST_SERVICE ?= test
 
 UP_FLAGS ?= -d
 BUILD_ARGS ?=
@@ -18,8 +17,7 @@ CONTAINER_SHELL ?= sh -lc 'if command -v bash >/dev/null 2>&1; then exec bash; e
 .PHONY: help \
 	up down restart build rebuild logs ps clean pull \
 	backend-up backend-down backend-build backend-rebuild backend-logs backend-shell \
-	worker-up worker-down worker-build worker-rebuild worker-logs worker-shell \
-	test-up test-down test-build test-rebuild test-logs test-shell
+	worker-up worker-down worker-build worker-rebuild worker-logs worker-shell
 
 help: ## Show available commands
 	@printf "\nDocker Compose shortcuts\n\n"
@@ -28,7 +26,6 @@ help: ## Show available commands
 	@printf "  COMPOSE_FILE      Optional compose file override\n"
 	@printf "  BACKEND_SERVICE   Backend service name (default: %s)\n" "$(BACKEND_SERVICE)"
 	@printf "  WORKER_SERVICE    Worker service name (default: %s)\n" "$(WORKER_SERVICE)"
-	@printf "  TEST_SERVICE      Test service name (default: %s)\n" "$(TEST_SERVICE)"
 	@printf "  VOLUMES=1         Remove named volumes when running 'make clean'\n"
 	@printf "  LOGS_ARGS         Override log options, example: LOGS_ARGS='--tail=200'\n\n"
 
@@ -81,4 +78,3 @@ endef
 
 $(eval $(call SERVICE_TARGETS,backend,$(BACKEND_SERVICE)))
 $(eval $(call SERVICE_TARGETS,worker,$(WORKER_SERVICE)))
-$(eval $(call SERVICE_TARGETS,test,$(TEST_SERVICE)))

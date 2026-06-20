@@ -8,7 +8,6 @@ This guide covers the processing-only branch of Repo A.
 - `worker`
 - `db`
 - `redis`
-- `test` (profile only)
 
 ## Start the processing stack
 
@@ -54,11 +53,14 @@ curl http://localhost:8000/videos/tasks/<task_id>
 curl http://localhost:8000/videos/<video_id>/transcript
 ```
 
-## Run tests
+## Runtime validation
 
 ```bash
-docker compose run --rm test
+python -m compileall backend/app
+docker compose config
 ```
+
+This repository intentionally avoids automated tests and a separate test image/runtime because the media and ML dependency stack is heavy for this personal project. Validate changes with runtime smoke checks, service logs, database inspection, and manual integration checks. This is a repository-specific trade-off, not a general backend recommendation.
 
 ## Branch-specific note
 

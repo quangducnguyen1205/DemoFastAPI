@@ -25,13 +25,3 @@ RUN adduser -u 5678 --disabled-password --gecos "" appuser \
 USER appuser
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-
-FROM runtime AS test
-
-USER root
-COPY requirements-test.txt .
-RUN python -m pip install --no-cache-dir -r requirements-test.txt
-USER appuser
-
-CMD ["pytest", "-v", "--assert=plain"]

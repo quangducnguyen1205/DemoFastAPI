@@ -38,7 +38,6 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - `worker`: Celery worker for audio extraction, Whisper transcription, and transcript persistence
 - `db`: PostgreSQL for durable processing state and transcript rows
 - `redis`: Celery broker/result backend
-- `test`: isolated test runner profile
 
 Media files are stored under `backend/media/` by default in this branch.
 
@@ -50,11 +49,14 @@ Run the processing stack:
 docker compose up --build backend worker db redis
 ```
 
-Run tests:
+Validate runtime wiring:
 
 ```bash
-docker compose run --rm test
+python -m compileall backend/app
+docker compose config
 ```
+
+This repository intentionally does not maintain automated tests or a separate test image/runtime. The media and ML dependency stack is heavy enough that, for this personal project, validation uses runtime smoke checks, logs, database inspection, and manual integration checks instead. This is a repository-specific trade-off, not a general recommendation for backend services.
 
 ## Compatibility notes
 
