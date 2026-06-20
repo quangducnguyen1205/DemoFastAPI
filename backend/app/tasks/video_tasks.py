@@ -7,6 +7,10 @@ from app.core.database import SessionLocal
 from app.core.celery_app import celery_app
 from app import models
 from app.services.object_storage import get_object_storage_client
+from app.services.processing_outbox import (
+    add_processing_failed_event,
+    add_transcript_ready_event,
+)
 from app.services.video_processing import (
     extract_audio_to_wav,
     transcribe_audio_with_whisper,
@@ -237,6 +241,11 @@ def process_asset_object_task(self, request: dict) -> dict:
             processing_request.status = "ready"
             processing_request.segment_count = len(segments)
             processing_request.error = None
+            add_transcript_ready_event(
+                db,
+                processing_request=processing_request,
+                segment_count=len(segments),
+            )
             db.commit()
             result = {"status": "ready", "asset_id": asset_id, "segments": segments}
             _log_timing(
@@ -257,6 +266,11 @@ def process_asset_object_task(self, request: dict) -> dict:
             if processing_request:
                 processing_request.status = "failed"
                 processing_request.error = str(e)
+                add_processing_failed_event(
+                    db,
+                    processing_request=processing_request,
+                    exc=e,
+                )
                 db.commit()
             result = {"status": "failed", "asset_id": asset_id, "error": str(e)}
             _log_timing(

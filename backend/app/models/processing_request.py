@@ -1,4 +1,16 @@
-from sqlalchemy import BigInteger, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -58,3 +70,44 @@ class ProcessingRequestTranscript(Base):
     )
 
     processing_request = relationship("ProcessingRequest", back_populates="transcripts")
+
+
+class ProcessingOutboxEvent(Base):
+    __tablename__ = "processing_outbox_events"
+
+    id = Column(String(64), primary_key=True, index=True)
+    event_type = Column(String(255), nullable=False, index=True)
+    event_version = Column(Integer, nullable=False)
+    aggregate_type = Column(String(64), nullable=False)
+    aggregate_id = Column(String(64), nullable=False, index=True)
+    event_key = Column(String(64), nullable=False, index=True)
+    causation_event_id = Column(String(64), nullable=False, index=True)
+    occurred_at = Column(DateTime(timezone=True), nullable=False)
+    payload = Column(JSON, nullable=False)
+    status = Column(String(50), nullable=False, default="pending", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "causation_event_id",
+            "event_type",
+            name="uq_processing_outbox_causation_event_type",
+        ),
+        CheckConstraint(
+            "event_version > 0",
+            name="ck_processing_outbox_event_version_positive",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="ck_processing_outbox_attempt_count_nonnegative",
+        ),
+    )

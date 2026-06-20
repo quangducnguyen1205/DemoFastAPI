@@ -16,10 +16,11 @@ Repo A is the internal processing service.
 | Videos router | `backend/app/routers/videos.py` | Upload, task polling, single-video status lookup, and transcript retrieval. |
 | Kafka consumer | `backend/app/consumers/asset_processing_consumer.py` | Consumes `asset.processing.requested.v1`, validates envelopes, applies idempotency, and hands accepted work to Celery. |
 | Celery app | `backend/app/core/celery_app.py` | Queue orchestration for background processing. |
-| Worker task | `backend/app/tasks/video_tasks.py` | Extract audio, transcribe, chunk transcript text, persist direct-upload transcripts, and update processing state. |
+| Worker task | `backend/app/tasks/video_tasks.py` | Extract audio, transcribe, chunk transcript text, persist direct-upload transcripts, update processing state, and persist result outbox intent for Kafka-originated work. |
 | Object storage | `backend/app/services/object_storage.py` | S3-compatible MinIO access used by workers to download Spring-owned media objects. |
+| Processing outbox | `backend/app/services/processing_outbox.py` | Builds internal result-event contracts and inserts pending outbox rows in the worker transaction. |
 | Processing helpers | `backend/app/services/video_processing.py` | ffmpeg extraction, Whisper access, transcript chunking, and transcript persistence. |
-| Persistence | `backend/app/models/video.py`, `backend/app/models/transcript.py`, `backend/app/models/processing_request.py` | Durable direct-upload processing state, transcript rows, Kafka idempotency records, and Kafka-originated transcript artifacts. |
+| Persistence | `backend/app/models/video.py`, `backend/app/models/transcript.py`, `backend/app/models/processing_request.py` | Durable direct-upload processing state, transcript rows, Kafka idempotency records, Kafka-originated transcript artifacts, and pending result outbox rows. |
 
 ## End-to-end flow
 
@@ -50,9 +51,34 @@ This path remains for compatibility while Project3 moves ingestion ownership int
 4. The consumer records `eventId` in `processing_requests` before handoff.
 5. The consumer enqueues `process_asset_object` with object-reference metadata only: bucket, object key, asset id, content type, and original filename.
 6. The consumer commits the Kafka offset after successful Celery handoff. Malformed or unsupported messages are logged and committed to avoid blocking the partition until a DLQ exists.
-7. The Celery worker downloads bytes from MinIO internally, transcribes, chunks, persists transcript artifact rows, and updates the internal processing request status.
+7. The Celery worker downloads bytes from MinIO internally, transcribes, chunks, persists transcript artifact rows, updates the internal processing request status, and inserts a pending result outbox row in the same database transaction.
 
 Delivery is at-least-once. Duplicate Kafka deliveries are expected and are suppressed by the unique `eventId` record in `processing_requests`. The Celery task also checks request state before processing to avoid repeating completed or already-running work.
+
+### Kafka-originated result intent
+
+When Kafka-originated processing reaches a terminal state, Repo A persists a `processing_outbox_events` row:
+
+- success: `transcript.ready` version 1
+- failure: `asset.processing.failed` version 1
+
+These are internal outbox contracts only. Repo A does not publish them to Kafka yet, and Repo B does not consume them yet. A later phase will add a relay/publisher and Spring-side result consumption.
+
+Common envelope fields are represented by outbox columns:
+
+- `id` as `eventId`
+- `event_type`
+- `event_version`
+- `aggregate_type = "ASSET"`
+- `aggregate_id = assetId`
+- `event_key = assetId`
+- `causation_event_id = original asset.processing.requested eventId`
+- `occurred_at`
+- `payload`
+
+The `transcript.ready` payload contains only `assetId`, `processingRequestId`, `status`, `segmentCount`, and `completedAt`. The `asset.processing.failed` payload contains only `assetId`, `processingRequestId`, `status`, `errorCode`, a bounded safe `errorMessage`, and `completedAt`.
+
+Result payloads do not include raw media bytes, transcript text, MinIO credentials, stack traces, or product authorization data. Transcript rows remain local processing artifacts referenced by `processingRequestId`.
 
 ## Persistence boundary
 
@@ -73,10 +99,16 @@ Repo A intentionally keeps only processing-oriented state:
   - transcript segment artifacts tied to `processing_requests.event_id`
   - segment index and text
   - nullable timing fields for future pipeline output
+- `processing_outbox_events`
+  - pending result-event intent for Kafka-originated processing completion/failure
+  - unique `(causation_event_id, event_type)` to prevent duplicate outbox intent from duplicate task execution
+  - publish bookkeeping fields for a later relay: `status`, `attempt_count`, `next_attempt_at`, `last_error`, and `published_at`
 
-Repo A does not own product auth, user identity, asset metadata, search indexes, or workspace/business logic in this branch. Kafka is transport, not a transfer of product-state ownership. Completion/failure events back to Spring are not implemented yet.
+Repo A does not own product auth, user identity, asset metadata, search indexes, or workspace/business logic in this branch. Kafka is transport, not a transfer of product-state ownership. Result-event publication back to Spring is not implemented yet.
 
-Kafka-originated transcript rows are processing artifacts. They support later completion/failure event publishing back to Spring but do not make FastAPI the product source of truth.
+Kafka-originated transcript and outbox rows are processing artifacts. They support later completion/failure event publishing back to Spring but do not make FastAPI the product source of truth.
+
+This repo currently uses SQLAlchemy `create_all` instead of Alembic. New local/personal databases get the new tables automatically; existing local DB data may need to be recreated if schema changes cannot be applied automatically.
 
 ## Removed from active runtime
 

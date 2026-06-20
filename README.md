@@ -14,6 +14,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - accept media uploads from Repo B through the transitional direct-upload endpoint
 - enqueue and run transcription processing
 - persist processing state, direct-upload transcript rows, and Kafka-originated processing transcript artifacts
+- persist pending processing result-event intent for Kafka-originated success/failure outcomes
 - return transcript results through the existing processing-side contract
 
 ## Not part of this branch
@@ -23,7 +24,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - no frontend/demo app
 - no auth or user-management API
 - no ownership/domain logic beyond legacy compatibility fields already accepted by the upload contract
-- no transcript-ready or failed Kafka events back to Repo B yet
+- no Kafka publication of transcript-ready or failed events back to Repo B yet
 
 ## Active HTTP surface
 
@@ -45,6 +46,13 @@ Kafka consumption is internal and does not add a public HTTP endpoint.
 - `redis`: Celery broker/result backend
 
 Direct-upload media files are stored under `backend/media/` by default in this branch. Kafka-originated processing uses Spring-provided MinIO/S3 object references and the Celery worker downloads bytes internally when processing starts.
+
+Kafka-originated worker completion writes `processing_outbox_events` rows for internal result contracts:
+
+- `transcript.ready` v1
+- `asset.processing.failed` v1
+
+These rows are durable pending intent only. They are not published to Kafka in this phase, and their payloads deliberately exclude raw media bytes, transcript text, credentials, and stack traces.
 
 ## Quickstart
 
@@ -72,6 +80,8 @@ This repository intentionally does not maintain automated tests or a separate te
 - Kafka delivery is at-least-once. The consumer is idempotent by `eventId` using the local `processing_requests` table and commits valid offsets after successful Celery handoff.
 - FastAPI treats Kafka as transport and MinIO object keys as references; product metadata, authorization, workspace state, and final product status remain owned by Repo B.
 - Kafka-originated transcript rows are processing artifacts that support later completion events back to Spring; they are not product truth.
+- Result outbox rows are also processing artifacts. They record intent for a later relay/publisher phase, not final product truth.
+- This repo currently relies on SQLAlchemy `create_all` rather than Alembic. For personal/local schema changes, local DB data may need to be recreated if an existing database cannot be altered automatically.
 
 ## Documentation
 

@@ -27,6 +27,7 @@ Repo A on this branch is an internal processing service used by the current inte
 4. Repo A hands object-reference metadata to Celery; raw media bytes are not placed in Kafka or Celery payloads.
 5. The worker downloads the object from MinIO internally before transcription.
 6. The worker stores transcript segment artifacts tied to the `processing_requests.event_id`.
+7. The worker writes a pending processing result outbox row for `transcript.ready` or `asset.processing.failed`.
 
 Offsets for valid events are committed after Celery handoff. Delivery is at-least-once, so duplicate events are handled by `eventId`.
 
@@ -41,7 +42,7 @@ Repo A still uses PostgreSQL because durable processing state matters for:
 
 Repo A does not act as the product system of record.
 
-Completion/failure Kafka events back to Repo B are intentionally not implemented yet.
+Completion/failure Kafka publication back to Repo B is intentionally not implemented yet. The current outbox rows are durable processing-side intent only; a later phase will add publishing and Spring consumption.
 
 ## Legacy compatibility
 

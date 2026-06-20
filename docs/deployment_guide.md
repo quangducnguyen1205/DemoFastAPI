@@ -72,6 +72,15 @@ docker compose up --build consumer
 
 The consumer commits valid offsets only after successful Celery handoff. Invalid or unsupported messages are logged and committed to avoid blocking the partition because this phase has no DLQ. Processing remains at-least-once and idempotent by `eventId`.
 
+Kafka-originated worker completion now persists pending result-event intent in `processing_outbox_events`:
+
+- `transcript.ready` v1 after transcript artifact rows and `ProcessingRequest.status="ready"` are persisted
+- `asset.processing.failed` v1 after `ProcessingRequest.status="failed"` is persisted
+
+These rows are not published to Kafka in this phase. A later relay/publisher will decide publication timing, retry behavior, and Spring-side consumption. FastAPI stores these rows as processing artifacts, not product truth.
+
+This repository does not use Alembic yet. `Base.metadata.create_all` creates missing tables for new local databases, including `processing_outbox_events`. If an existing personal/local database cannot reflect schema changes automatically, recreating local data may be necessary.
+
 ## Runtime validation
 
 ```bash
@@ -85,4 +94,4 @@ This repository intentionally avoids automated tests and a separate test image/r
 
 This branch is not meant to run a frontend or a search stack. If you are looking for product-facing behavior, use Repo B and Repo FE.
 
-Completion/failure events from FastAPI back to Spring are not implemented in this phase.
+Publication of completion/failure events from FastAPI back to Spring is not implemented in this phase.

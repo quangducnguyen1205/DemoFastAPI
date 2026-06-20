@@ -126,7 +126,50 @@ Rows are ordered by `segment_index`.
 - Payload boundary: MinIO/S3 bucket and object key references only, never raw media bytes
 - Processing artifacts: transcript segment rows are stored internally by processing request for later completion-event work
 
-FastAPI does not own product metadata, authorization, workspace membership, or asset state. Completion/failure events back to Spring are not implemented in this phase.
+## Internal result outbox contracts
+
+FastAPI persists pending result-event intent for Kafka-originated processing, but it does not publish those events to Kafka yet.
+
+Common outbox envelope fields:
+
+- `eventId`: outbox row `id`
+- `eventType`: `transcript.ready` or `asset.processing.failed`
+- `eventVersion`: `1`
+- `aggregateType`: `ASSET`
+- `aggregateId`: asset id
+- `eventKey`: asset id
+- `causationEventId`: original incoming `asset.processing.requested` event id
+- `occurredAt`: outbox row `occurred_at`
+- `payload`: event-specific JSON
+
+`transcript.ready` v1 payload:
+
+```json
+{
+  "assetId": "asset-id",
+  "processingRequestId": "incoming-event-id",
+  "status": "ready",
+  "segmentCount": 12,
+  "completedAt": "2026-06-20T00:00:00Z"
+}
+```
+
+`asset.processing.failed` v1 payload:
+
+```json
+{
+  "assetId": "asset-id",
+  "processingRequestId": "incoming-event-id",
+  "status": "failed",
+  "errorCode": "PROCESSING_FAILED",
+  "errorMessage": "Safe bounded message",
+  "completedAt": "2026-06-20T00:00:00Z"
+}
+```
+
+Result payloads exclude raw media bytes, transcript text/segments, credentials, stack traces, and product authorization data. Transcript text remains in processing artifact rows and can be retrieved later through a dedicated internal contract when that phase exists.
+
+FastAPI does not own product metadata, authorization, workspace membership, or asset state. Result-event publication back to Spring is not implemented in this phase.
 
 ## Removed from this branch
 
