@@ -8,3 +8,5 @@ openai-whisper==20250625
 python-dotenv==1.1.1
 celery
 redis==6.4.0
+kafka-python
+boto3

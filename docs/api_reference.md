@@ -2,6 +2,8 @@
 
 This branch exposes only the processing-service contract that Repo B needs.
 
+Kafka consumption is internal to FastAPI and does not add a public HTTP API. The consumer reads `asset.processing.requested.v1`, validates the envelope, records idempotency by `eventId`, and hands object-reference metadata to Celery.
+
 ## Base URL
 
 ```text
@@ -114,6 +116,17 @@ Example:
 ```
 
 Rows are ordered by `segment_index`.
+
+## Internal Kafka intake
+
+- Topic: `asset.processing.requested.v1`
+- Consumer group: `fastapi-processing-v1`
+- Delivery model: at-least-once
+- Idempotency key: `eventId`
+- Payload boundary: MinIO/S3 bucket and object key references only, never raw media bytes
+- Processing artifacts: transcript segment rows are stored internally by processing request for later completion-event work
+
+FastAPI does not own product metadata, authorization, workspace membership, or asset state. Completion/failure events back to Spring are not implemented in this phase.
 
 ## Removed from this branch
 

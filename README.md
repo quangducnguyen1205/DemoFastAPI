@@ -4,15 +4,16 @@ Repo A on this branch is an internal processing service for the integrated produ
 
 - Repo B: product-facing backend and system of record
 - Repo FE: product UI
-- Repo A: upload, process, poll status, fetch transcript
+- Repo A: internal Kafka consumer, upload compatibility path, process, poll status, fetch transcript
 
 This branch intentionally removes product/demo/search responsibilities from Repo A.
 
 ## Active responsibility
 
-- accept media uploads from Repo B
+- consume `asset.processing.requested.v1` from Kafka for Spring-owned assets
+- accept media uploads from Repo B through the transitional direct-upload endpoint
 - enqueue and run transcription processing
-- persist processing state and transcript rows
+- persist processing state, direct-upload transcript rows, and Kafka-originated processing transcript artifacts
 - return transcript results through the existing processing-side contract
 
 ## Not part of this branch
@@ -22,6 +23,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - no frontend/demo app
 - no auth or user-management API
 - no ownership/domain logic beyond legacy compatibility fields already accepted by the upload contract
+- no transcript-ready or failed Kafka events back to Repo B yet
 
 ## Active HTTP surface
 
@@ -32,21 +34,24 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - `GET /videos/{video_id}`
 - `GET /videos/{video_id}/transcript`
 
+Kafka consumption is internal and does not add a public HTTP endpoint.
+
 ## Runtime services
 
 - `backend`: FastAPI API for upload/status/transcript endpoints
+- `consumer`: Kafka consumer for `asset.processing.requested.v1`
 - `worker`: Celery worker for audio extraction, Whisper transcription, and transcript persistence
 - `db`: PostgreSQL for durable processing state and transcript rows
 - `redis`: Celery broker/result backend
 
-Media files are stored under `backend/media/` by default in this branch.
+Direct-upload media files are stored under `backend/media/` by default in this branch. Kafka-originated processing uses Spring-provided MinIO/S3 object references and the Celery worker downloads bytes internally when processing starts.
 
 ## Quickstart
 
 Run the processing stack:
 
 ```bash
-docker compose up --build backend worker db redis
+docker compose up --build backend worker consumer db redis
 ```
 
 Validate runtime wiring:
@@ -64,6 +69,9 @@ This repository intentionally does not maintain automated tests or a separate te
 - `GET /videos/tasks/{task_id}` still mirrors Celery task state.
 - `GET /videos/{video_id}/transcript` still returns ordered transcript rows by `segment_index`.
 - `owner_id` is still accepted on upload and returned on video reads for backward compatibility, but Repo A does not treat it as an authorization boundary.
+- Kafka delivery is at-least-once. The consumer is idempotent by `eventId` using the local `processing_requests` table and commits valid offsets after successful Celery handoff.
+- FastAPI treats Kafka as transport and MinIO object keys as references; product metadata, authorization, workspace state, and final product status remain owned by Repo B.
+- Kafka-originated transcript rows are processing artifacts that support later completion events back to Spring; they are not product truth.
 
 ## Documentation
 

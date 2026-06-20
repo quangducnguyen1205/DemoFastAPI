@@ -44,6 +44,33 @@ class Settings:
     CELERY_RESULT_BACKEND: str = _env("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
     CELERY_WORKER_PREFETCH_MULTIPLIER: int = _env_int("CELERY_WORKER_PREFETCH_MULTIPLIER", 1)
 
+    # Kafka consumer configuration. The broker itself is owned outside this repo.
+    KAFKA_BOOTSTRAP_SERVERS: str = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    KAFKA_ASSET_PROCESSING_TOPIC: str = _env("KAFKA_ASSET_PROCESSING_TOPIC", "asset.processing.requested.v1")
+    KAFKA_CONSUMER_GROUP: str = _env("KAFKA_CONSUMER_GROUP", "fastapi-processing-v1")
+    KAFKA_AUTO_OFFSET_RESET: str = _env("KAFKA_AUTO_OFFSET_RESET", "earliest")
+    KAFKA_RECONNECT_BACKOFF_SECONDS: int = _env_int("KAFKA_RECONNECT_BACKOFF_SECONDS", 5)
+
+    # S3-compatible object storage for Spring-owned media references.
+    OBJECT_STORAGE_ENDPOINT_URL: str = _env(
+        "OBJECT_STORAGE_ENDPOINT_URL",
+        _env("MINIO_ENDPOINT_URL", "http://localhost:9000"),
+    )
+    OBJECT_STORAGE_ACCESS_KEY_ID: str = _env(
+        "OBJECT_STORAGE_ACCESS_KEY_ID",
+        _env("MINIO_ACCESS_KEY", "minioadmin"),
+    )
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: str = _env(
+        "OBJECT_STORAGE_SECRET_ACCESS_KEY",
+        _env("MINIO_SECRET_KEY", "minioadmin"),
+    )
+    OBJECT_STORAGE_REGION: str = _env("OBJECT_STORAGE_REGION", "us-east-1")
+    LOG_LEVEL: str = _env("LOG_LEVEL", "INFO")
+
+    @property
+    def KAFKA_BOOTSTRAP_SERVERS_LIST(self) -> list[str]:
+        return [server.strip() for server in self.KAFKA_BOOTSTRAP_SERVERS.split(",") if server.strip()]
+
     @property
     def VIDEO_DIR(self) -> str:
         return str(Path(self.MEDIA_ROOT) / self.VIDEO_SUBDIR)
