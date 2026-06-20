@@ -84,5 +84,29 @@ services:
       - ./backend:/backend
     command: python -m app.consumers.asset_processing_consumer
 
+  result-relay:
+    image: demofirstbackend-python:latest
+    profiles:
+      - manual
+    depends_on:
+      - db
+    environment:
+      PYTHONPATH: /backend
+      DATABASE_URL: ${DATABASE_URL}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
+      KAFKA_PROCESSING_RESULT_TOPIC: ${KAFKA_PROCESSING_RESULT_TOPIC:-asset.processing.result.v1}
+      KAFKA_SEND_TIMEOUT_SECONDS: ${KAFKA_SEND_TIMEOUT_SECONDS:-10}
+      PROCESSING_RESULT_PUBLISHER_ENABLED: ${PROCESSING_RESULT_PUBLISHER_ENABLED:-false}
+      PROCESSING_OUTBOX_RELAY_ENABLED: ${PROCESSING_OUTBOX_RELAY_ENABLED:-false}
+      PROCESSING_OUTBOX_RELAY_BATCH_SIZE: ${PROCESSING_OUTBOX_RELAY_BATCH_SIZE:-10}
+      PROCESSING_OUTBOX_RELAY_MAX_ATTEMPTS: ${PROCESSING_OUTBOX_RELAY_MAX_ATTEMPTS:-5}
+      PROCESSING_OUTBOX_RELAY_RETRY_DELAY_SECONDS: ${PROCESSING_OUTBOX_RELAY_RETRY_DELAY_SECONDS:-60}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    volumes:
+      - ./backend:/backend
+    command: python -m app.relays.processing_outbox_relay
+
 volumes:
   postgres_data:

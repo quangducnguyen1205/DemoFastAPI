@@ -25,6 +25,20 @@ def _env_int(name: str, default: int) -> int:
     return int(val)
 
 
+def _env_float(name: str, default: float) -> float:
+    val = _env(name)
+    if val is None:
+        return default
+    return float(val)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = _env(name)
+    if val is None:
+        return default
+    return val.lower() in {"1", "true", "yes", "on"}
+
+
 def _is_docker() -> bool:
     # Heuristic: docker sets this file
     return Path("/.docker").exists() or _env("DOCKERIZED", "false").lower() in {"1", "true", "yes"}
@@ -50,6 +64,18 @@ class Settings:
     KAFKA_CONSUMER_GROUP: str = _env("KAFKA_CONSUMER_GROUP", "fastapi-processing-v1")
     KAFKA_AUTO_OFFSET_RESET: str = _env("KAFKA_AUTO_OFFSET_RESET", "earliest")
     KAFKA_RECONNECT_BACKOFF_SECONDS: int = _env_int("KAFKA_RECONNECT_BACKOFF_SECONDS", 5)
+    KAFKA_PROCESSING_RESULT_TOPIC: str = _env("KAFKA_PROCESSING_RESULT_TOPIC", "asset.processing.result.v1")
+    KAFKA_SEND_TIMEOUT_SECONDS: float = _env_float("KAFKA_SEND_TIMEOUT_SECONDS", 10.0)
+
+    # Result outbox relay configuration. The relay is intentionally manual/off by default.
+    PROCESSING_RESULT_PUBLISHER_ENABLED: bool = _env_bool("PROCESSING_RESULT_PUBLISHER_ENABLED", False)
+    PROCESSING_OUTBOX_RELAY_ENABLED: bool = _env_bool("PROCESSING_OUTBOX_RELAY_ENABLED", False)
+    PROCESSING_OUTBOX_RELAY_BATCH_SIZE: int = _env_int("PROCESSING_OUTBOX_RELAY_BATCH_SIZE", 10)
+    PROCESSING_OUTBOX_RELAY_MAX_ATTEMPTS: int = _env_int("PROCESSING_OUTBOX_RELAY_MAX_ATTEMPTS", 5)
+    PROCESSING_OUTBOX_RELAY_RETRY_DELAY_SECONDS: int = _env_int(
+        "PROCESSING_OUTBOX_RELAY_RETRY_DELAY_SECONDS",
+        60,
+    )
 
     # S3-compatible object storage for Spring-owned media references.
     OBJECT_STORAGE_ENDPOINT_URL: str = _env(

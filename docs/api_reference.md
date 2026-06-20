@@ -128,7 +128,13 @@ Rows are ordered by `segment_index`.
 
 ## Internal result outbox contracts
 
-FastAPI persists pending result-event intent for Kafka-originated processing, but it does not publish those events to Kafka yet.
+FastAPI persists result-event intent for Kafka-originated processing. When explicitly enabled and invoked, the manual relay publishes those events to one shared result topic:
+
+```text
+asset.processing.result.v1
+```
+
+Both `transcript.ready` and `asset.processing.failed` use this topic because they are result events for the same asset aggregate family. `eventType` distinguishes success from failure.
 
 Common outbox envelope fields:
 
@@ -169,7 +175,9 @@ Common outbox envelope fields:
 
 Result payloads exclude raw media bytes, transcript text/segments, credentials, stack traces, and product authorization data. Transcript text remains in processing artifact rows and can be retrieved later through a dedicated internal contract when that phase exists.
 
-FastAPI does not own product metadata, authorization, workspace membership, or asset state. Result-event publication back to Spring is not implemented in this phase.
+Kafka message key is the asset id from `eventKey`. Publication is at-least-once, so future Spring consumers must be idempotent by result `eventId`.
+
+FastAPI does not own product metadata, authorization, workspace membership, or asset state. Spring-side result-event consumption is not implemented in this phase.
 
 ## Removed from this branch
 

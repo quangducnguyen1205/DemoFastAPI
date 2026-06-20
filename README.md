@@ -14,7 +14,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - accept media uploads from Repo B through the transitional direct-upload endpoint
 - enqueue and run transcription processing
 - persist processing state, direct-upload transcript rows, and Kafka-originated processing transcript artifacts
-- persist pending processing result-event intent for Kafka-originated success/failure outcomes
+- persist and manually relay processing result events for Kafka-originated success/failure outcomes
 - return transcript results through the existing processing-side contract
 
 ## Not part of this branch
@@ -24,7 +24,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - no frontend/demo app
 - no auth or user-management API
 - no ownership/domain logic beyond legacy compatibility fields already accepted by the upload contract
-- no Kafka publication of transcript-ready or failed events back to Repo B yet
+- no Spring-side consumption of transcript-ready or failed result events yet
 
 ## Active HTTP surface
 
@@ -41,6 +41,7 @@ Kafka consumption is internal and does not add a public HTTP endpoint.
 
 - `backend`: FastAPI API for upload/status/transcript endpoints
 - `consumer`: Kafka consumer for `asset.processing.requested.v1`
+- `result-relay`: optional one-shot relay for `processing_outbox_events`
 - `worker`: Celery worker for audio extraction, Whisper transcription, and transcript persistence
 - `db`: PostgreSQL for durable processing state and transcript rows
 - `redis`: Celery broker/result backend
@@ -52,7 +53,15 @@ Kafka-originated worker completion writes `processing_outbox_events` rows for in
 - `transcript.ready` v1
 - `asset.processing.failed` v1
 
-These rows are durable pending intent only. They are not published to Kafka in this phase, and their payloads deliberately exclude raw media bytes, transcript text, credentials, and stack traces.
+These rows are durable pending intent until the explicit relay publishes them, and their payloads deliberately exclude raw media bytes, transcript text, credentials, and stack traces.
+
+When explicitly enabled and invoked, the manual result relay publishes pending outbox rows to the shared result topic:
+
+```text
+asset.processing.result.v1
+```
+
+Both success and failure use the same topic because they are result events for the same asset aggregate family; `eventType` distinguishes `transcript.ready` from `asset.processing.failed`. The relay is disabled by default, is not scheduled, and does not start Kafka. Spring consumption of this topic is future work.
 
 ## Quickstart
 
@@ -78,9 +87,11 @@ This repository intentionally does not maintain automated tests or a separate te
 - `GET /videos/{video_id}/transcript` still returns ordered transcript rows by `segment_index`.
 - `owner_id` is still accepted on upload and returned on video reads for backward compatibility, but Repo A does not treat it as an authorization boundary.
 - Kafka delivery is at-least-once. The consumer is idempotent by `eventId` using the local `processing_requests` table and commits valid offsets after successful Celery handoff.
+- Result publication is also at-least-once. Future Spring consumers must be idempotent by result `eventId`.
 - FastAPI treats Kafka as transport and MinIO object keys as references; product metadata, authorization, workspace state, and final product status remain owned by Repo B.
 - Kafka-originated transcript rows are processing artifacts that support later completion events back to Spring; they are not product truth.
-- Result outbox rows are also processing artifacts. They record intent for a later relay/publisher phase, not final product truth.
+- Result outbox rows are also processing artifacts. They record relay state and publication intent, not final product truth.
+- Stuck `publishing` recovery and DLQ handling are future work.
 - This repo currently relies on SQLAlchemy `create_all` rather than Alembic. For personal/local schema changes, local DB data may need to be recreated if an existing database cannot be altered automatically.
 
 ## Documentation
