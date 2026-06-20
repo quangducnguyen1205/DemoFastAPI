@@ -110,7 +110,9 @@ Rules:
 
 The relay is disabled by default and is not scheduled. It can be invoked once through `python -m app.relays.processing_outbox_relay` or the optional Compose `result-relay` profile. There is no logging publisher that pretends to publish; if Kafka publishing is disabled, the publisher fails explicitly.
 
-Stuck `publishing` recovery after process interruption is not implemented yet. DLQ and parking-topic handling are also future work. Publication is at-least-once, so the future Spring consumer must be idempotent by result `eventId`.
+The result Kafka producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries while keeping the existing bounded acknowledgement timeout.
+
+Stuck `publishing` recovery after process interruption is not implemented yet. DLQ and parking-topic handling are also future work. Publication is at-least-once, not end-to-end exactly-once, because a relay process can publish and then crash before marking the outbox row `published`. The future Spring consumer must be idempotent by result `eventId`.
 
 ## Persistence boundary
 

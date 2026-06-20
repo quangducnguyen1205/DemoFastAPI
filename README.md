@@ -61,7 +61,7 @@ When explicitly enabled and invoked, the manual result relay publishes pending o
 asset.processing.result.v1
 ```
 
-Both success and failure use the same topic because they are result events for the same asset aggregate family; `eventType` distinguishes `transcript.ready` from `asset.processing.failed`. The relay is disabled by default, is not scheduled, and does not start Kafka. Spring consumption of this topic is future work.
+Both success and failure use the same topic because they are result events for the same asset aggregate family; `eventType` distinguishes `transcript.ready` from `asset.processing.failed`. The relay is disabled by default, is not scheduled, and does not start Kafka. When enabled, the Kafka producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries. The runtime Kafka client is pinned to `kafka-python==2.3.1` for reproducible producer behavior. Spring consumption of this topic is future work.
 
 ## Quickstart
 
@@ -87,7 +87,7 @@ This repository intentionally does not maintain automated tests or a separate te
 - `GET /videos/{video_id}/transcript` still returns ordered transcript rows by `segment_index`.
 - `owner_id` is still accepted on upload and returned on video reads for backward compatibility, but Repo A does not treat it as an authorization boundary.
 - Kafka delivery is at-least-once. The consumer is idempotent by `eventId` using the local `processing_requests` table and commits valid offsets after successful Celery handoff.
-- Result publication is also at-least-once. Future Spring consumers must be idempotent by result `eventId`.
+- Result publication is also at-least-once. Producer idempotence does not make the outbox relay end-to-end exactly-once because a process can still publish and crash before marking the row `published`. Future Spring consumers must be idempotent by result `eventId`.
 - FastAPI treats Kafka as transport and MinIO object keys as references; product metadata, authorization, workspace state, and final product status remain owned by Repo B.
 - Kafka-originated transcript rows are processing artifacts that support later completion events back to Spring; they are not product truth.
 - Result outbox rows are also processing artifacts. They record relay state and publication intent, not final product truth.

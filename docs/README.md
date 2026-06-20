@@ -30,7 +30,7 @@ Repo A on this branch is an internal processing service used by the current inte
 7. The worker writes a pending processing result outbox row for `transcript.ready` or `asset.processing.failed`.
 8. When explicitly enabled and invoked, the one-shot result relay publishes due outbox rows to `asset.processing.result.v1`.
 
-Offsets for valid events are committed after Celery handoff. Delivery is at-least-once, so duplicate events are handled by `eventId`.
+Offsets for valid events are committed after Celery handoff. Delivery is at-least-once, so duplicate events are handled by `eventId`. Result publishing uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries, but the outbox relay is still at-least-once and future Spring consumers must be idempotent by result `eventId`.
 
 ## Persistence boundary
 

@@ -175,7 +175,7 @@ Common outbox envelope fields:
 
 Result payloads exclude raw media bytes, transcript text/segments, credentials, stack traces, and product authorization data. Transcript text remains in processing artifact rows and can be retrieved later through a dedicated internal contract when that phase exists.
 
-Kafka message key is the asset id from `eventKey`. Publication is at-least-once, so future Spring consumers must be idempotent by result `eventId`.
+Kafka message key is the asset id from `eventKey`. The result producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries. Publication is still at-least-once because the relay can publish and then crash before marking the outbox row `published`, so future Spring consumers must be idempotent by result `eventId`.
 
 FastAPI does not own product metadata, authorization, workspace membership, or asset state. Spring-side result-event consumption is not implemented in this phase.
 

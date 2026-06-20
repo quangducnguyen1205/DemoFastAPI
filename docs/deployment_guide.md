@@ -104,9 +104,9 @@ PROCESSING_RESULT_PUBLISHER_ENABLED=true \
 docker compose --profile manual run --rm result-relay
 ```
 
-The relay is disabled by default and is not scheduled. It claims due `pending` rows, marks them `publishing`, waits for Kafka acknowledgement, then marks them `published`. Publish failures return rows to `pending` with `next_attempt_at` until max attempts, after which rows become `failed`.
+The relay is disabled by default and is not scheduled. It claims due `pending` rows, marks them `publishing`, waits for Kafka acknowledgement, then marks them `published`. Publish failures return rows to `pending` with `next_attempt_at` until max attempts, after which rows become `failed`. The Kafka producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries. The runtime Kafka client is pinned to `kafka-python==2.3.1` for reproducible producer behavior.
 
-Stuck `publishing` recovery after process interruption and DLQ/parking-topic handling are future work. Publication is at-least-once; future Spring consumers must be idempotent by result `eventId`.
+Stuck `publishing` recovery after process interruption and DLQ/parking-topic handling are future work. Publication is at-least-once rather than end-to-end exactly-once because the relay can publish and then crash before marking the row `published`; future Spring consumers must be idempotent by result `eventId`.
 
 This repository does not use Alembic yet. `Base.metadata.create_all` creates missing tables for new local databases, including `processing_outbox_events`. If an existing personal/local database cannot reflect schema changes automatically, recreating local data may be necessary.
 

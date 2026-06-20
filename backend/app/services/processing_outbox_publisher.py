@@ -98,19 +98,24 @@ class KafkaProcessingOutboxPublisher:
         self.send_timeout_seconds = send_timeout_seconds or settings.KAFKA_SEND_TIMEOUT_SECONDS
         self._producer = None
 
+    def _producer_config(self) -> dict[str, Any]:
+        return {
+            "bootstrap_servers": self.bootstrap_servers,
+            "acks": "all",
+            "enable_idempotence": True,
+            "key_serializer": lambda value: value.encode("utf-8"),
+            "value_serializer": lambda value: json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        }
+
     def _get_producer(self):
         if self._producer is None:
             from kafka import KafkaProducer
 
-            self._producer = KafkaProducer(
-                bootstrap_servers=self.bootstrap_servers,
-                key_serializer=lambda value: value.encode("utf-8"),
-                value_serializer=lambda value: json.dumps(
-                    value,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ).encode("utf-8"),
-            )
+            self._producer = KafkaProducer(**self._producer_config())
         return self._producer
 
     def publish(self, event: models.ProcessingOutboxEvent) -> None:
