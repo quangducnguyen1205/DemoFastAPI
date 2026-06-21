@@ -14,6 +14,7 @@ Repo A is the internal processing service.
 |-----------|----------|----------------|
 | FastAPI API | `backend/app/main.py` | Exposes the processing endpoints and health/docs surface. |
 | Videos router | `backend/app/routers/videos.py` | Upload, task polling, single-video status lookup, and transcript retrieval. |
+| Internal processing router | `backend/app/routers/internal_processing.py` | Read-only retrieval of Kafka-originated transcript artifact rows for trusted Spring service calls. |
 | Kafka consumer | `backend/app/consumers/asset_processing_consumer.py` | Consumes `asset.processing.requested.v1`, validates envelopes, applies idempotency, and hands accepted work to Celery. |
 | Celery app | `backend/app/core/celery_app.py` | Queue orchestration for background processing. |
 | Worker task | `backend/app/tasks/video_tasks.py` | Extract audio, transcribe, chunk transcript text, persist direct-upload transcripts, update processing state, and persist result outbox intent for Kafka-originated work. |
@@ -64,7 +65,7 @@ When Kafka-originated processing reaches a terminal state, Repo A persists a `pr
 - success: `transcript.ready` version 1
 - failure: `asset.processing.failed` version 1
 
-These are internal outbox contracts. Repo A can publish them to Kafka only when the manual relay and Kafka publisher are explicitly enabled. Repo B/Spring does not consume them yet.
+These are internal outbox contracts. Repo A can publish them to Kafka only when the manual relay and Kafka publisher are explicitly enabled. Spring has a manual result-handler foundation, but automatic Spring Kafka listener consumption is still future work.
 
 Common envelope fields are represented by outbox columns:
 
@@ -81,6 +82,20 @@ Common envelope fields are represented by outbox columns:
 The `transcript.ready` payload contains only `assetId`, `processingRequestId`, `status`, `segmentCount`, and `completedAt`. The `asset.processing.failed` payload contains only `assetId`, `processingRequestId`, `status`, `errorCode`, a bounded safe `errorMessage`, and `completedAt`.
 
 Result payloads do not include raw media bytes, transcript text, MinIO credentials, stack traces, or product authorization data. Transcript rows remain local processing artifacts referenced by `processingRequestId`.
+
+### Internal transcript artifact retrieval
+
+When Spring handles `transcript.ready`, it retrieves transcript content through:
+
+```text
+GET /internal/processing-requests/{processingRequestId}/transcript-rows
+```
+
+The `processingRequestId` is the original Spring request event ID stored as `ProcessingRequest.event_id`. The endpoint returns the processing artifact rows in ascending `segment_index` order using Spring's existing transcript-row JSON shape: `id`, `video_id`, `segment_index`, `text`, and `created_at`. For Kafka-originated artifacts, `video_id` carries the processing request/event ID because there is no direct-upload `videos.id` row.
+
+This endpoint is read-only. It does not change `ProcessingRequest`, transcript rows, Celery state, Kafka, or outbox rows. It returns `404` for unknown requests and `409` when a request is failed, not ready, or ready without usable artifact rows.
+
+This is an internal deployment contract, not a public product API. Production-grade service-to-service authentication and network policy are not implemented in this phase, and Spring remains the owner of final product transcript snapshots after retrieval and validation.
 
 ### Result outbox relay
 
@@ -138,7 +153,7 @@ Repo A intentionally keeps only processing-oriented state:
   - unique `(causation_event_id, event_type)` to prevent duplicate outbox intent from duplicate task execution
   - publish bookkeeping fields for the manual relay: `status`, `attempt_count`, `next_attempt_at`, `last_error`, and `published_at`
 
-Repo A does not own product auth, user identity, asset metadata, search indexes, or workspace/business logic in this branch. Kafka is transport, not a transfer of product-state ownership. Spring-side result-event consumption is not implemented yet.
+Repo A does not own product auth, user identity, asset metadata, search indexes, or workspace/business logic in this branch. Kafka is transport, not a transfer of product-state ownership. Automatic Spring Kafka listener consumption is not implemented yet.
 
 Kafka-originated transcript and outbox rows are processing artifacts. They support later completion/failure event publishing back to Spring but do not make FastAPI the product source of truth.
 

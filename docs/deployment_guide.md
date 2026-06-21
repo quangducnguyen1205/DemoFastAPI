@@ -85,7 +85,15 @@ Kafka-originated worker completion now persists pending result-event intent in `
 - `transcript.ready` v1 after transcript artifact rows and `ProcessingRequest.status="ready"` are persisted
 - `asset.processing.failed` v1 after `ProcessingRequest.status="failed"` is persisted
 
-When explicitly enabled and invoked, the one-shot relay publishes these rows to `asset.processing.result.v1`. Spring-side consumption is not implemented yet. FastAPI stores outbox rows as processing artifacts, not product truth.
+When explicitly enabled and invoked, the one-shot relay publishes these rows to `asset.processing.result.v1`. Automatic Spring Kafka listener consumption is not implemented yet. FastAPI stores outbox rows as processing artifacts, not product truth.
+
+Spring can retrieve Kafka-originated transcript artifacts through the internal read-only endpoint:
+
+```text
+GET /internal/processing-requests/{processingRequestId}/transcript-rows
+```
+
+The endpoint returns ordered rows with `id`, `video_id`, `segment_index`, `text`, and `created_at`, matching Spring's existing FastAPI transcript-row DTO. It returns `404` for unknown processing requests and `409` when a request is failed, not ready, or ready without usable transcript artifacts. It is an internal deployment contract only; production-grade service-to-service authentication and network policy are not implemented in this phase.
 
 Run the relay once from local Python:
 
@@ -123,4 +131,4 @@ This repository intentionally avoids automated tests and a separate test image/r
 
 This branch is not meant to run a frontend or a search stack. If you are looking for product-facing behavior, use Repo B and Repo FE.
 
-Spring-side consumption of completion/failure events is not implemented in this phase.
+Automatic Spring Kafka listener consumption of completion/failure events is not implemented in this phase.

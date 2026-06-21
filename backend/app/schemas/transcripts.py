@@ -18,3 +18,10 @@ class TranscriptRead(TranscriptBase):
 
     class Config:
         from_attributes = True
+
+
+class ProcessingTranscriptRowRead(TranscriptBase):
+    id: str
+    video_id: str
+    segment_index: int
+    created_at: datetime

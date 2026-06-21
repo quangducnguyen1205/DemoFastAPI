@@ -117,6 +117,39 @@ Example:
 
 Rows are ordered by `segment_index`.
 
+### GET `/internal/processing-requests/{processingRequestId}/transcript-rows`
+
+Returns Kafka-originated transcript artifact rows for a ready processing request. This is a trusted internal service contract used by Spring when handling `transcript.ready`; it is not a public product API and does not make FastAPI the product transcript owner.
+
+`processingRequestId` is the original Spring `asset.processing.requested` event ID stored as `processing_requests.event_id`.
+
+Success response:
+
+```json
+[
+  {
+    "id": "1",
+    "video_id": "9d0d6e36-d45f-41dc-8a73-33ebf0f31749",
+    "segment_index": 0,
+    "text": "First processing artifact chunk.",
+    "created_at": "2026-06-21T10:00:00Z"
+  }
+]
+```
+
+Rows are ordered by `segment_index` and then internal row id. The response is an array with the JSON fields Spring's existing `FastApiTranscriptRowResponse` expects: `id`, `video_id`, `segment_index`, `text`, and `created_at`. For Kafka-originated artifact rows, `video_id` carries the processing request/event ID for compatibility with that DTO.
+
+Intentional non-success behavior:
+
+- malformed `processingRequestId`: `400`
+- unknown processing request: `404`
+- request failed or not yet `ready`: `409`
+- request marked `ready` without usable artifact rows: `409`
+
+The endpoint is read-only. It does not update processing state, enqueue Celery work, publish Kafka, or create outbox rows. It does not return raw media paths, MinIO object references, credentials, stack traces, Celery internals, ownership metadata, or timing fields that Spring does not currently consume.
+
+Production-grade service-to-service authentication and network policy are not implemented in this phase. Deploy it only on trusted internal networks until that boundary is hardened.
+
 ## Internal Kafka intake
 
 - Topic: `asset.processing.requested.v1`

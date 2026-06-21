@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 # Load environment variables from .env as early as possible
 load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
 
-from app.routers import videos
+from app.routers import internal_processing, videos
 from app.core.database import engine, Base
 from app.config.settings import settings
 # Ensure models are imported so SQLAlchemy registers tables
@@ -65,6 +65,7 @@ app.add_middleware(
 )
 
 app.include_router(videos.router, prefix="/videos", tags=["videos"])
+app.include_router(internal_processing.router)
 
 # Root endpoint
 @app.get("/")

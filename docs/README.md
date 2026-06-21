@@ -29,6 +29,7 @@ Repo A on this branch is an internal processing service used by the current inte
 6. The worker stores transcript segment artifacts tied to the `processing_requests.event_id`.
 7. The worker writes a pending processing result outbox row for `transcript.ready` or `asset.processing.failed`.
 8. When explicitly enabled and invoked, the one-shot result relay publishes due outbox rows to `asset.processing.result.v1`.
+9. Spring can retrieve ready transcript artifact rows through `GET /internal/processing-requests/{processingRequestId}/transcript-rows` before persisting its product-owned transcript snapshot.
 
 Offsets for valid events are committed after Celery handoff. Delivery is at-least-once, so duplicate events are handled by `eventId`. Result publishing uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries, but the outbox relay is still at-least-once and future Spring consumers must be idempotent by result `eventId`.
 
@@ -43,7 +44,7 @@ Repo A still uses PostgreSQL because durable processing state matters for:
 
 Repo A does not act as the product system of record.
 
-Spring consumption of completion/failure Kafka result events is intentionally not implemented yet. The current relay only publishes processing result events when explicitly enabled and manually invoked.
+Automatic Spring Kafka listener consumption of completion/failure result events is intentionally not implemented yet. The current relay only publishes processing result events when explicitly enabled and manually invoked.
 
 ## Legacy compatibility
 
