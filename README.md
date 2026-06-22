@@ -73,11 +73,20 @@ Run the processing stack:
 docker compose up --build backend worker consumer db redis
 ```
 
+For Project3 cross-service runtime with Spring-owned Kafka and MinIO, start the Spring infrastructure first, then run DemoFastAPI with the integration overlay:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.project3.yml up -d db redis backend consumer worker
+```
+
+The base Compose file remains standalone-compatible for direct upload and host-based local development. The overlay joins `backend`, `consumer`, `worker`, and the manual-profile `result-relay` service to the external Spring network `${SPRING_INFRA_NETWORK:-infra_default}` and switches container-side integration addresses to `kafka:29092` and `http://minio:9000`. Use the overlay with an existing runtime image when possible; it does not add a new image, Dockerfile, build target, scheduler, or production deployment claim.
+
 Validate runtime wiring:
 
 ```bash
 python -m compileall backend/app
 docker compose config
+docker compose -f docker-compose.yml -f docker-compose.project3.yml config
 ```
 
 This repository intentionally does not maintain automated tests or a separate test image/runtime. The media and ML dependency stack is heavy enough that, for this personal project, validation uses runtime smoke checks, logs, database inspection, and manual integration checks instead. This is a repository-specific trade-off, not a general recommendation for backend services.

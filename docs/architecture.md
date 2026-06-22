@@ -25,6 +25,18 @@ Repo A is the internal processing service.
 | Processing helpers | `backend/app/services/video_processing.py` | ffmpeg extraction, Whisper access, transcript chunking, and transcript persistence. |
 | Persistence | `backend/app/models/video.py`, `backend/app/models/transcript.py`, `backend/app/models/processing_request.py` | Durable direct-upload processing state, transcript rows, Kafka idempotency records, Kafka-originated transcript artifacts, and pending result outbox rows. |
 
+## Compose topology
+
+The base `docker-compose.yml` remains the standalone/local processing topology. It keeps DemoFastAPI `db` and `redis` on the normal Compose network and preserves host-oriented defaults for local direct-upload behavior.
+
+Project3 cross-service runtime uses the additive overlay:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.project3.yml ...
+```
+
+The overlay attaches only `backend`, `consumer`, `worker`, and the manual `result-relay` service to the external Spring infrastructure network `${SPRING_INFRA_NETWORK:-infra_default}`. It leaves DemoFastAPI `db` and `redis` on the local DemoFastAPI network. Container-side integration defaults become `KAFKA_BOOTSTRAP_SERVERS=kafka:29092` and `OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000`, matching Spring Compose service names. This removes the previous runtime-only network workaround without making the base Compose file depend on Spring infrastructure.
+
 ## End-to-end flow
 
 ### Transitional direct-upload flow

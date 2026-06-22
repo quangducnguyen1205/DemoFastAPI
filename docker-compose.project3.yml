@@ -1,0 +1,37 @@
+services:
+  backend:
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      OBJECT_STORAGE_ENDPOINT_URL: ${PROJECT3_OBJECT_STORAGE_ENDPOINT_URL:-http://minio:9000}
+    networks:
+      - default
+      - spring-infra
+
+  consumer:
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      OBJECT_STORAGE_ENDPOINT_URL: ${PROJECT3_OBJECT_STORAGE_ENDPOINT_URL:-http://minio:9000}
+    networks:
+      - default
+      - spring-infra
+
+  worker:
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      OBJECT_STORAGE_ENDPOINT_URL: ${PROJECT3_OBJECT_STORAGE_ENDPOINT_URL:-http://minio:9000}
+    networks:
+      - default
+      - spring-infra
+
+  result-relay:
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      OBJECT_STORAGE_ENDPOINT_URL: ${PROJECT3_OBJECT_STORAGE_ENDPOINT_URL:-http://minio:9000}
+    networks:
+      - default
+      - spring-infra
+
+networks:
+  spring-infra:
+    name: ${SPRING_INFRA_NETWORK:-infra_default}
+    external: true

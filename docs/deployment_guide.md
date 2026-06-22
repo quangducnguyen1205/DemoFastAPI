@@ -80,6 +80,31 @@ docker compose up --build consumer
 
 The consumer commits valid offsets only after successful Celery handoff. Invalid or unsupported messages are logged and committed to avoid blocking the partition because this phase has no DLQ. Processing remains at-least-once and idempotent by `eventId`.
 
+## Project3 cross-compose integration
+
+Base `docker-compose.yml` remains usable by itself for standalone/direct-upload development. For the Project3 async path, use the additive overlay:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.project3.yml up -d db redis backend consumer worker
+```
+
+Expected local startup order:
+
+1. Start Spring infrastructure first, including Kafka, MinIO, topic bootstrap, and bucket bootstrap.
+2. Start DemoFastAPI with both Compose files.
+3. Start the Spring application or run the manual smoke command.
+
+The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. It attaches only `backend`, `consumer`, `worker`, and the manual `result-relay` profile service to that external network. DemoFastAPI `db` and `redis` stay on the normal local network.
+
+Container-side integration defaults in the overlay are:
+
+```text
+KAFKA_BOOTSTRAP_SERVERS=${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+OBJECT_STORAGE_ENDPOINT_URL=${PROJECT3_OBJECT_STORAGE_ENDPOINT_URL:-http://minio:9000}
+```
+
+These names match the Spring infrastructure services on `infra_default`. The overlay removes the previous temporary workaround of manually connecting running FastAPI containers to `infra_default` and using mixed host/container addresses. It does not add a new image, build target, scheduler, automatic listener, retry topic, DLQ, or production deployment claim. Use `--pull never` during smoke runs when reusing an existing local runtime image.
+
 Kafka-originated worker completion now persists pending result-event intent in `processing_outbox_events`:
 
 - `transcript.ready` v1 after transcript artifact rows and `ProcessingRequest.status="ready"` are persisted
