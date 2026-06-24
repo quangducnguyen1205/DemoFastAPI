@@ -161,7 +161,7 @@ Production-grade service-to-service authentication and network policy are not im
 
 ## Internal result outbox contracts
 
-FastAPI persists result-event intent for Kafka-originated processing. When explicitly enabled and invoked, the manual relay publishes those events to one shared result topic:
+FastAPI persists result-event intent for Kafka-originated processing. When explicitly enabled and invoked, a result relay publishes those events to one shared result topic:
 
 ```text
 asset.processing.result.v1
@@ -206,11 +206,11 @@ Common outbox envelope fields:
 }
 ```
 
-Result payloads exclude raw media bytes, transcript text/segments, credentials, stack traces, and product authorization data. Transcript text remains in processing artifact rows and can be retrieved later through a dedicated internal contract when that phase exists.
+Result payloads exclude raw media bytes, transcript text/segments, credentials, stack traces, and product authorization data. Transcript text remains in processing artifact rows and can be retrieved through `GET /internal/processing-requests/{processingRequestId}/transcript-rows`.
 
-Kafka message key is the asset id from `eventKey`. The result producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries. Publication is still at-least-once because the relay can publish and then crash before marking the outbox row `published`, so future Spring consumers must be idempotent by result `eventId`.
+Kafka message key is the asset id from `eventKey`. The result producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries. Publication is still at-least-once because the relay can publish and then crash before marking the outbox row `published`, so Spring consumers must be idempotent by result `eventId`.
 
-FastAPI does not own product metadata, authorization, workspace membership, or asset state. Spring-side result-event consumption is not implemented in this phase.
+FastAPI does not own product metadata, authorization, workspace membership, or asset state. Spring-side result-event consumption is owned by the product repository and remains disabled by default.
 
 ## Removed from this branch
 

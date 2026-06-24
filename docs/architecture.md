@@ -21,7 +21,7 @@ Repo A is the internal processing service.
 | Object storage | `backend/app/services/object_storage.py` | S3-compatible MinIO access used by workers to download Spring-owned media objects. |
 | Processing outbox | `backend/app/services/processing_outbox.py` | Builds internal result-event contracts and inserts pending outbox rows in the worker transaction. |
 | Result publisher | `backend/app/services/processing_outbox_publisher.py` | Builds result envelopes and publishes to Kafka when explicitly enabled. |
-| Result relay | `backend/app/services/processing_outbox_relay.py`, `backend/app/relays/processing_outbox_relay.py` | One-shot manual relay that claims due outbox rows and publishes them. No scheduler is included. |
+| Result relay | `backend/app/services/processing_outbox_relay.py`, `backend/app/relays/processing_outbox_relay.py`, `backend/app/relays/processing_outbox_auto_relay.py` | Manual one-shot relay plus opt-in automatic relay process. Both reuse the same durable claim/publish/retry state machine. |
 | Processing helpers | `backend/app/services/video_processing.py` | ffmpeg extraction, Whisper access, transcript chunking, and transcript persistence. |
 | Persistence | `backend/app/models/video.py`, `backend/app/models/transcript.py`, `backend/app/models/processing_request.py` | Durable direct-upload processing state, transcript rows, Kafka idempotency records, Kafka-originated transcript artifacts, and pending result outbox rows. |
 
@@ -35,7 +35,7 @@ Project3 cross-service runtime uses the additive overlay:
 docker compose -f docker-compose.yml -f docker-compose.project3.yml ...
 ```
 
-The overlay attaches only `backend`, `consumer`, `worker`, and the manual `result-relay` service to the external Spring infrastructure network `${SPRING_INFRA_NETWORK:-infra_default}`. It leaves DemoFastAPI `db` and `redis` on the local DemoFastAPI network. Container-side integration defaults become `KAFKA_BOOTSTRAP_SERVERS=kafka:29092` and `OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000`, matching Spring Compose service names. This removes the previous runtime-only network workaround without making the base Compose file depend on Spring infrastructure.
+The overlay attaches only `backend`, `consumer`, `worker`, and the manual-profile `result-relay` service to the external Spring infrastructure network `${SPRING_INFRA_NETWORK:-infra_default}`. It leaves DemoFastAPI `db` and `redis` on the local DemoFastAPI network. Container-side integration defaults become `KAFKA_BOOTSTRAP_SERVERS=kafka:29092` and `OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000` for services that need object storage, matching Spring Compose service names. `result-relay` only receives the Kafka/result-outbox configuration it needs. With the overlay, `result-relay` runs the opt-in automatic relay entrypoint; without the overlay, the base Compose service remains the manual one-shot relay. This removes the previous runtime-only network workaround without making the base Compose file depend on Spring infrastructure.
 
 ## End-to-end flow
 
@@ -77,7 +77,7 @@ When Kafka-originated processing reaches a terminal state, Repo A persists a `pr
 - success: `transcript.ready` version 1
 - failure: `asset.processing.failed` version 1
 
-These are internal outbox contracts. Repo A can publish them to Kafka only when the manual relay and Kafka publisher are explicitly enabled. Spring has a manual result-handler foundation, but automatic Spring Kafka listener consumption is still future work.
+These are internal outbox contracts. Repo A can publish them to Kafka only when a result relay process and Kafka publisher are explicitly enabled. Spring has both a manual result-handler foundation and a disabled-by-default automatic result listener; Spring remains responsible for idempotent product-state application.
 
 Common envelope fields are represented by outbox columns:
 
@@ -135,11 +135,17 @@ Rules:
 - on success it sets `published`, `published_at`, clears retry fields, and commits;
 - on failure it increments `attempt_count`, stores a bounded safe `last_error`, and either returns to `pending` with `next_attempt_at` or transitions to `failed` after max attempts.
 
-The relay is disabled by default and is not scheduled. It can be invoked once through `python -m app.relays.processing_outbox_relay` or the optional Compose `result-relay` profile. There is no logging publisher that pretends to publish; if Kafka publishing is disabled, the publisher fails explicitly.
+The manual relay is disabled by default and is not scheduled. It can be invoked once through `python -m app.relays.processing_outbox_relay` or the base Compose `result-relay` profile with `PROCESSING_OUTBOX_RELAY_ENABLED=true`.
+
+The Project3 overlay can run `result-relay` as a long-running automatic relay process with `python -m app.relays.processing_outbox_auto_relay`. That process has two safety gates: the command/service must be started explicitly, and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true` must be set. It runs bounded iterations using `PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE`, sleeps for `PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS`, and logs aggregate iteration counts only when rows were claimed, retried, or terminally failed. It remains stateless between iterations except for PostgreSQL state.
+
+Both relay modes use the same publisher boundary. There is no logging publisher that pretends to publish; if Kafka publishing is disabled, the publisher fails explicitly.
 
 The result Kafka producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries while keeping the existing bounded acknowledgement timeout.
 
-Stuck `publishing` recovery after process interruption is not implemented yet. DLQ and parking-topic handling are also future work. Publication is at-least-once, not end-to-end exactly-once, because a relay process can publish and then crash before marking the outbox row `published`. The future Spring consumer must be idempotent by result `eventId`.
+The automatic relay does not live inside `backend`, `consumer`, or `worker`, and it does not scan arbitrary event tables. Result payloads stay compact and do not contain transcript text, raw media bytes, object storage credentials, tokens, stack traces, or product ownership data.
+
+Stuck `publishing` recovery after process interruption is not implemented yet. DLQ and parking-topic handling are also future work. Publication is at-least-once, not end-to-end exactly-once, because a relay process can publish and then crash before marking the outbox row `published`. Spring consumers must be idempotent by result `eventId`.
 
 ## Persistence boundary
 
@@ -163,9 +169,9 @@ Repo A intentionally keeps only processing-oriented state:
 - `processing_outbox_events`
   - result-event relay state for Kafka-originated processing completion/failure
   - unique `(causation_event_id, event_type)` to prevent duplicate outbox intent from duplicate task execution
-  - publish bookkeeping fields for the manual relay: `status`, `attempt_count`, `next_attempt_at`, `last_error`, and `published_at`
+  - publish bookkeeping fields for the result relay: `status`, `attempt_count`, `next_attempt_at`, `last_error`, and `published_at`
 
-Repo A does not own product auth, user identity, asset metadata, search indexes, or workspace/business logic in this branch. Kafka is transport, not a transfer of product-state ownership. Automatic Spring Kafka listener consumption is not implemented yet.
+Repo A does not own product auth, user identity, asset metadata, search indexes, or workspace/business logic in this branch. Kafka is transport, not a transfer of product-state ownership.
 
 Kafka-originated transcript and outbox rows are processing artifacts. They support later completion/failure event publishing back to Spring but do not make FastAPI the product source of truth.
 

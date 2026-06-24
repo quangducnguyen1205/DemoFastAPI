@@ -24,12 +24,17 @@ services:
       - spring-infra
 
   result-relay:
+    # Keep the automatic relay environment narrow; base Compose still owns the one-shot env file.
+    env_file: !reset []
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
-      OBJECT_STORAGE_ENDPOINT_URL: ${PROJECT3_OBJECT_STORAGE_ENDPOINT_URL:-http://minio:9000}
+      PROCESSING_OUTBOX_AUTO_RELAY_ENABLED: ${PROCESSING_OUTBOX_AUTO_RELAY_ENABLED:-false}
+      PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS: ${PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS:-10}
+      PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE: ${PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE:-10}
     networks:
       - default
       - spring-infra
+    command: python -m app.relays.processing_outbox_auto_relay
 
 networks:
   spring-infra:

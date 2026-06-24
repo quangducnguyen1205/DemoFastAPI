@@ -7,7 +7,7 @@ This guide covers the processing-only branch of Repo A.
 - `backend`
 - `worker`
 - `consumer`
-- `result-relay` (manual profile, one-shot)
+- `result-relay` (manual profile; one-shot in base Compose, opt-in automatic with the Project3 overlay)
 - `db`
 - `redis`
 
@@ -35,6 +35,9 @@ docker compose up --build backend worker consumer db redis
 - `PROCESSING_OUTBOX_RELAY_BATCH_SIZE` (default: `10`)
 - `PROCESSING_OUTBOX_RELAY_MAX_ATTEMPTS` (default: `5`)
 - `PROCESSING_OUTBOX_RELAY_RETRY_DELAY_SECONDS` (default: `60`)
+- `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED` (default: `false`)
+- `PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS` (default: `10`)
+- `PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE` (default: `10`)
 - `OBJECT_STORAGE_ENDPOINT_URL`
 - `OBJECT_STORAGE_ACCESS_KEY_ID`
 - `OBJECT_STORAGE_SECRET_ACCESS_KEY`
@@ -94,7 +97,7 @@ Expected local startup order:
 2. Start DemoFastAPI with both Compose files.
 3. Start the Spring application or run the manual smoke command.
 
-The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. It attaches only `backend`, `consumer`, `worker`, and the manual `result-relay` profile service to that external network. DemoFastAPI `db` and `redis` stay on the normal local network.
+The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. It attaches only `backend`, `consumer`, `worker`, and the manual-profile `result-relay` service to that external network. DemoFastAPI `db` and `redis` stay on the normal local network.
 
 Container-side integration defaults in the overlay are:
 
@@ -103,14 +106,16 @@ KAFKA_BOOTSTRAP_SERVERS=${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
 OBJECT_STORAGE_ENDPOINT_URL=${PROJECT3_OBJECT_STORAGE_ENDPOINT_URL:-http://minio:9000}
 ```
 
-These names match the Spring infrastructure services on `infra_default`. The overlay removes the previous temporary workaround of manually connecting running FastAPI containers to `infra_default` and using mixed host/container addresses. It does not add a new image, build target, scheduler, automatic listener, retry topic, DLQ, or production deployment claim. Use `--pull never` during smoke runs when reusing an existing local runtime image.
+These names match the Spring infrastructure services on `infra_default`. The overlay removes the previous temporary workaround of manually connecting running FastAPI containers to `infra_default` and using mixed host/container addresses. It does not add a new image, build target, automatic listener, retry topic, DLQ, or production deployment claim. Use `--pull never` during smoke runs when reusing an existing local runtime image.
+
+`result-relay` joins the Spring network for Kafka access, but it does not receive MinIO/object-storage configuration because publishing result outbox rows does not read media objects.
 
 Kafka-originated worker completion now persists pending result-event intent in `processing_outbox_events`:
 
 - `transcript.ready` v1 after transcript artifact rows and `ProcessingRequest.status="ready"` are persisted
 - `asset.processing.failed` v1 after `ProcessingRequest.status="failed"` is persisted
 
-When explicitly enabled and invoked, the one-shot relay publishes these rows to `asset.processing.result.v1`. Automatic Spring Kafka listener consumption is not implemented yet. FastAPI stores outbox rows as processing artifacts, not product truth.
+When explicitly enabled and invoked, the relay publishes these rows to `asset.processing.result.v1`. FastAPI stores outbox rows as processing artifacts, not product truth.
 
 Spring can retrieve Kafka-originated transcript artifacts through the internal read-only endpoint:
 
@@ -137,9 +142,26 @@ PROCESSING_RESULT_PUBLISHER_ENABLED=true \
 docker compose --profile manual run --rm result-relay
 ```
 
-The relay is disabled by default and is not scheduled. It claims due `pending` rows, marks them `publishing`, waits for Kafka acknowledgement, then marks them `published`. Publish failures return rows to `pending` with `next_attempt_at` until max attempts, after which rows become `failed`. The Kafka producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries. The runtime Kafka client is pinned to `kafka-python==2.3.1` for reproducible producer behavior.
+Run the opt-in automatic relay with the Project3 overlay:
 
-Stuck `publishing` recovery after process interruption and DLQ/parking-topic handling are future work. Publication is at-least-once rather than end-to-end exactly-once because the relay can publish and then crash before marking the row `published`; future Spring consumers must be idempotent by result `eventId`.
+```bash
+PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true \
+PROCESSING_RESULT_PUBLISHER_ENABLED=true \
+docker compose --profile manual \
+  -f docker-compose.yml \
+  -f docker-compose.project3.yml \
+  up result-relay
+```
+
+The automatic relay is a dedicated long-running process, not behavior inside `backend`, `consumer`, or `worker`. It has two safety gates: start the `result-relay` command/service explicitly, and set `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true`. `PROCESSING_RESULT_PUBLISHER_ENABLED=true` is still required for Kafka publication; otherwise the disabled publisher fails explicitly and no fake logging publisher marks rows as published.
+
+The base one-shot relay uses `PROCESSING_OUTBOX_RELAY_ENABLED` and `PROCESSING_OUTBOX_RELAY_BATCH_SIZE`. The automatic relay uses `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED`, `PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS`, and `PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE` while preserving the same retry/max-attempt settings. Invalid auto interval or batch-size values fail at startup.
+
+Both relay modes claim due `pending` rows, mark them `publishing`, wait for Kafka acknowledgement, then mark them `published`. Publish failures return rows to `pending` with `next_attempt_at` until max attempts, after which rows become `failed`. Each row is processed independently, and the database claim transaction is committed before waiting for Kafka. The Kafka producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries. The runtime Kafka client is pinned to `kafka-python==2.3.1` for reproducible producer behavior.
+
+Stuck `publishing` recovery after process interruption and DLQ/parking-topic handling are future work. Publication is at-least-once rather than end-to-end exactly-once because the relay can publish and then crash before marking the row `published`; Spring consumers must be idempotent by result `eventId`.
+
+The automatic relay publishes only due FastAPI processing-result outbox rows through the existing supported contracts: `transcript.ready` and `asset.processing.failed`. It is not a generic event relay and does not place transcript text, media bytes, object storage credentials, tokens, stack traces, or product ownership data in result payloads. No runtime smoke for the automatic FastAPI relay was run in this phase.
 
 This repository does not use Alembic yet. `Base.metadata.create_all` creates missing tables for new local databases, including `processing_outbox_events`. If an existing personal/local database cannot reflect schema changes automatically, recreating local data may be necessary.
 
@@ -156,4 +178,4 @@ This repository intentionally avoids automated tests and a separate test image/r
 
 This branch is not meant to run a frontend or a search stack. If you are looking for product-facing behavior, use Repo B and Repo FE.
 
-Automatic Spring Kafka listener consumption of completion/failure events is not implemented in this phase.
+Automatic Spring Kafka listener consumption exists in the product repository but remains disabled by default. Enable it only as part of a controlled local integration run.

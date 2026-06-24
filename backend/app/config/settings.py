@@ -25,6 +25,20 @@ def _env_int(name: str, default: int) -> int:
     return int(val)
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    val = _env(name)
+    if val is None:
+        value = default
+    else:
+        try:
+            value = int(val)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be an integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1")
+    return value
+
+
 def _env_float(name: str, default: float) -> float:
     val = _env(name)
     if val is None:
@@ -75,6 +89,15 @@ class Settings:
     PROCESSING_OUTBOX_RELAY_RETRY_DELAY_SECONDS: int = _env_int(
         "PROCESSING_OUTBOX_RELAY_RETRY_DELAY_SECONDS",
         60,
+    )
+    PROCESSING_OUTBOX_AUTO_RELAY_ENABLED: bool = _env_bool("PROCESSING_OUTBOX_AUTO_RELAY_ENABLED", False)
+    PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS: int = _env_positive_int(
+        "PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS",
+        10,
+    )
+    PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE: int = _env_positive_int(
+        "PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE",
+        10,
     )
 
     # S3-compatible object storage for Spring-owned media references.
