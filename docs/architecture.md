@@ -145,6 +145,8 @@ The result Kafka producer uses `acks=all` and `enable_idempotence=True` to reduc
 
 The automatic relay does not live inside `backend`, `consumer`, or `worker`, and it does not scan arbitrary event tables. Result payloads stay compact and do not contain transcript text, raw media bytes, object storage credentials, tokens, stack traces, or product ownership data.
 
+P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified this process as part of the fully automatic runtime path: the overlay `result-relay` service published one selected durable result outbox row after the consumer and Celery worker processed a Spring-owned MinIO object, and Spring's automatic result listener applied the result. No base one-shot result relay was invoked. Direct upload remained the product default and was not exercised; indexing/search stayed disabled.
+
 Stuck `publishing` recovery after process interruption is not implemented yet. DLQ and parking-topic handling are also future work. Publication is at-least-once, not end-to-end exactly-once, because a relay process can publish and then crash before marking the outbox row `published`. Spring consumers must be idempotent by result `eventId`.
 
 ## Persistence boundary

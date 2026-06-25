@@ -44,7 +44,7 @@ Repo A still uses PostgreSQL because durable processing state matters for:
 
 Repo A does not act as the product system of record.
 
-Spring has a disabled-by-default result listener for completion/failure events. Repo A's base relay remains a manual one-shot command, and the Project3 overlay can run a dedicated long-running automatic relay process only when that service is explicitly started and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true`. No runtime smoke for the automatic FastAPI relay was run in this phase.
+Spring has a disabled-by-default result listener for completion/failure events. Repo A's base relay remains a manual one-shot command, and the Project3 overlay can run a dedicated long-running automatic relay process only when that service is explicitly started and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true`. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the automatic relay in the fully automatic runtime path: Spring automatic request relay, Repo A consumer/Celery processing from MinIO, Repo A automatic result relay, and Spring automatic result listener completed one upload without manual request or result relay commands.
 
 ## Legacy compatibility
 
