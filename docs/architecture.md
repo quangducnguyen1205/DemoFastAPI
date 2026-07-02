@@ -15,6 +15,8 @@ Repo A is the internal processing service.
 | FastAPI API | `backend/app/main.py` | Exposes the processing endpoints and health/docs surface. |
 | Videos router | `backend/app/routers/videos.py` | Upload, task polling, single-video status lookup, and transcript retrieval. |
 | Internal processing router | `backend/app/routers/internal_processing.py` | Read-only retrieval of Kafka-originated transcript artifact rows for trusted Spring service calls. |
+| Internal assistant router | `backend/app/routers/internal_assistant.py` | Trusted Spring-only grounded answer endpoint that accepts Spring-approved context and returns a normalized answer contract. |
+| Ollama assistant adapter | `backend/app/services/assistant_ollama.py` | Disabled-by-default non-streaming Ollama `/api/generate` caller for the assistant endpoint. |
 | Kafka consumer | `backend/app/consumers/asset_processing_consumer.py` | Consumes `asset.processing.requested.v1`, validates envelopes, applies idempotency, and hands accepted work to Celery. |
 | Celery app | `backend/app/core/celery_app.py` | Queue orchestration for background processing. |
 | Worker task | `backend/app/tasks/video_tasks.py` | Extract audio, transcribe, chunk transcript text, persist direct-upload transcripts, update processing state, and persist result outbox intent for Kafka-originated work. |
@@ -108,6 +110,28 @@ The `processingRequestId` is the original Spring request event ID stored as `Pro
 This endpoint is read-only. It does not change `ProcessingRequest`, transcript rows, Celery state, Kafka, or outbox rows. It returns `404` for unknown requests and `409` when a request is failed, not ready, or ready without usable artifact rows.
 
 This is an internal deployment contract, not a public product API. Production-grade service-to-service authentication and network policy are not implemented in this phase, and Spring remains the owner of final product transcript snapshots after retrieval and validation.
+
+### Internal assistant answer generation
+
+Spring calls Repo A through:
+
+```text
+POST /internal/assistant/answer
+```
+
+The request contains only `question` and `sources[]` entries already selected by Spring. Each source carries a Spring-issued `sourceId`, bounded context `text`, and small citation metadata such as asset title, transcript row id, segment index, and created-at value. Repo A does not query PostgreSQL, Elasticsearch, MinIO, Kafka, Celery, or Spring APIs for assistant context in this flow.
+
+The response contains only:
+
+```json
+{
+  "answer": "string",
+  "citedSourceIds": ["source-id"],
+  "insufficientContext": false
+}
+```
+
+`ASSISTANT_LLM_ENABLED=false` keeps the path disabled by default and returns HTTP 503 instead of a fake answer. When enabled later, the only provider path is native-host Ollama through non-streaming `/api/generate` with JSON output requested. No streaming, model switcher, fallback provider, embeddings, persistence, memory, queue, or independent retrieval path is added. P3-F2A is code-contract-only; Ollama installation, `qwen3:1.7b` download, FastAPI runtime smoke, Docker startup, and end-to-end answer verification remain `[CẦN XÁC MINH]` in a later phase.
 
 ### Result outbox relay
 

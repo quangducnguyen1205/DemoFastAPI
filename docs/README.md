@@ -7,6 +7,7 @@ Repo A on this branch is an internal processing service used by the current inte
 - Repo B owns product-facing APIs, authorization, search behavior, and workspace/domain logic.
 - Repo FE owns the product UI.
 - Repo A owns internal processing intake, background processing, processing-state persistence, and transcript delivery.
+- Repo A owns one internal grounded-answer adapter endpoint for trusted Spring calls, but Spring still supplies all assistant context and validates final citations.
 - Kafka and MinIO are integration boundaries: Repo A consumes object references from Kafka and reads bytes from MinIO, but Repo B remains the product system of record.
 
 ## Processing flow
@@ -45,6 +46,12 @@ Repo A still uses PostgreSQL because durable processing state matters for:
 Repo A does not act as the product system of record.
 
 Spring has a disabled-by-default result listener for completion/failure events. Repo A's base relay remains a manual one-shot command, and the Project3 overlay can run a dedicated long-running automatic relay process only when that service is explicitly started and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true`. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the automatic relay in the fully automatic runtime path: Spring automatic request relay, Repo A consumer/Celery processing from MinIO, Repo A automatic result relay, and Spring automatic result listener completed one upload without manual request or result relay commands.
+
+## Internal assistant adapter
+
+P3-F2A adds `POST /internal/assistant/answer` for Spring-owned grounded answer orchestration. The request contains a question and bounded source entries supplied by Spring; Repo A does not call PostgreSQL, Elasticsearch, MinIO, Kafka, Celery, or Spring to retrieve assistant context. The adapter path is disabled by default with `ASSISTANT_LLM_ENABLED=false`. When enabled later, it calls native host Ollama non-streaming through `/api/generate`, requests JSON output, and returns only `answer`, `citedSourceIds`, and `insufficientContext`.
+
+Ollama is intended to run natively on the user's macOS host with `qwen3:1.7b` in a later runtime phase. This code change does not install Ollama, download a model, start Docker, run FastAPI, or perform an end-to-end answer smoke.
 
 ## Legacy compatibility
 

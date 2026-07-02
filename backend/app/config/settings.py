@@ -116,6 +116,12 @@ class Settings:
     OBJECT_STORAGE_REGION: str = _env("OBJECT_STORAGE_REGION", "us-east-1")
     LOG_LEVEL: str = _env("LOG_LEVEL", "INFO")
 
+    # Internal assistant generation. Disabled by default; Spring supplies all context.
+    ASSISTANT_LLM_ENABLED: bool = _env_bool("ASSISTANT_LLM_ENABLED", False)
+    ASSISTANT_OLLAMA_BASE_URL: str = _env("ASSISTANT_OLLAMA_BASE_URL", "")
+    ASSISTANT_OLLAMA_MODEL: str = _env("ASSISTANT_OLLAMA_MODEL", "")
+    ASSISTANT_OLLAMA_TIMEOUT_SECONDS: float = _env_float("ASSISTANT_OLLAMA_TIMEOUT_SECONDS", 15.0)
+
     @property
     def KAFKA_BOOTSTRAP_SERVERS_LIST(self) -> list[str]:
         return [server.strip() for server in self.KAFKA_BOOTSTRAP_SERVERS.split(",") if server.strip()]

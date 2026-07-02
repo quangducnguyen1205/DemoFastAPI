@@ -16,6 +16,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - persist processing state, direct-upload transcript rows, and Kafka-originated processing transcript artifacts
 - persist and relay processing result events for Kafka-originated success/failure outcomes when explicitly enabled
 - expose Kafka-originated transcript artifacts to Spring through an internal read-only retrieval endpoint
+- expose one disabled-by-default internal grounded assistant answer endpoint for Spring-approved context
 - return transcript results through the existing processing-side contract
 
 ## Not part of this branch
@@ -36,8 +37,9 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - `GET /videos/{video_id}`
 - `GET /videos/{video_id}/transcript`
 - `GET /internal/processing-requests/{processingRequestId}/transcript-rows`
+- `POST /internal/assistant/answer`
 
-Kafka consumption is internal and does not add a public HTTP endpoint. The `/internal/.../transcript-rows` endpoint is a trusted deployment contract for Spring result handling, not a browser-facing product API.
+Kafka consumption is internal and does not add a public HTTP endpoint. The `/internal/.../transcript-rows` and `/internal/assistant/answer` endpoints are trusted deployment contracts for Spring service calls, not browser-facing product APIs.
 
 ## Runtime services
 
@@ -66,6 +68,8 @@ asset.processing.result.v1
 Both success and failure use the same topic because they are result events for the same asset aggregate family; `eventType` distinguishes `transcript.ready` from `asset.processing.failed`. The manual relay is disabled by default, is not scheduled, and does not start Kafka. When enabled, the Kafka producer uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries. The runtime Kafka client is pinned to `kafka-python==2.3.1` for reproducible producer behavior.
 
 The Project3 overlay can also run `result-relay` as a long-running automatic relay process. It has two safety gates: the service/command must be started explicitly, and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true` must be set. Kafka publishing must still be explicitly enabled with `PROCESSING_RESULT_PUBLISHER_ENABLED=true`; otherwise the disabled publisher fails rather than pretending to publish. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified this automatic relay in the fully automatic Spring/FastAPI path: one durable processing result outbox row was published to `asset.processing.result.v1`, no manual one-shot relay was invoked, and Spring applied the result through its automatic listener.
+
+The internal assistant endpoint is disabled by default with `ASSISTANT_LLM_ENABLED=false`. When enabled later, it calls native host Ollama non-streaming and returns only `answer`, `citedSourceIds`, and `insufficientContext`. It does not retrieve context from PostgreSQL, Elasticsearch, MinIO, Kafka, Celery, or Spring APIs. P3-F2A adds code contracts only; it does not install Ollama, download `qwen3:1.7b`, start Docker/FastAPI/Spring, or perform an end-to-end answer smoke.
 
 ## Quickstart
 
@@ -108,6 +112,7 @@ This repository intentionally does not maintain automated tests or a separate te
 - Result outbox rows are also processing artifacts. They record relay state and publication intent, not final product truth.
 - Spring remains the owner of final product transcript snapshots after it retrieves and validates processing artifact rows.
 - Production-grade service-to-service authentication or network policy for internal endpoints is not implemented in this phase.
+- P3-F2A adds a disabled-by-default internal Ollama assistant adapter for Spring-approved context only. Ollama native-host runtime, model download, and end-to-end answer behavior remain future work.
 - P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the fully automatic path: Spring `kafka_request` plus automatic request relay, FastAPI consumer/Celery processing from MinIO, FastAPI automatic result relay, and Spring automatic result listener. Direct upload remained the default product mode and was not exercised; search/indexing stayed disabled.
 - Stuck `publishing` recovery, default cutover away from `direct_upload`, generic all-event relay, production deployment hardening, retry topics, and DLQ handling are future work.
 - This repo currently relies on SQLAlchemy `create_all` rather than Alembic. For personal/local schema changes, local DB data may need to be recreated if an existing database cannot be altered automatically.
