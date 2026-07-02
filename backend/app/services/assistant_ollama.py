@@ -11,6 +11,21 @@ from app.schemas.assistant import AssistantAnswerRequest, AssistantAnswerRespons
 
 logger = logging.getLogger(__name__)
 
+ASSISTANT_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string", "minLength": 1},
+        "citedSourceIds": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "maxItems": 10,
+        },
+        "insufficientContext": {"type": "boolean"},
+    },
+    "required": ["answer", "citedSourceIds", "insufficientContext"],
+    "additionalProperties": False,
+}
+
 
 class AssistantLlmUnavailable(RuntimeError):
     pass
@@ -23,7 +38,7 @@ class OllamaAssistantClient:
             "model": settings.ASSISTANT_OLLAMA_MODEL,
             "prompt": self._build_prompt(request),
             "stream": False,
-            "format": "json",
+            "format": ASSISTANT_RESPONSE_SCHEMA,
             "options": {"temperature": 0},
         }
         ollama_response = self._post_generate(payload)
