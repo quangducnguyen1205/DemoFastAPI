@@ -84,11 +84,17 @@ Return exactly one JSON object with this shape:
 {{"answer":"string","citedSourceIds":["source-id"],"insufficientContext":false}}
 
 Rules:
-- Answer only from the supplied sources.
-- Do not use outside knowledge.
-- If the sources are insufficient, set insufficientContext to true and citedSourceIds to [].
-- For a normal answer, cite only supplied Source ID values.
+- Answer only from the supplied sources, keep the answer concise, and do not use outside knowledge.
 - Do not include Markdown links, invented metadata, or hidden reasoning.
+
+Evidence selection rules:
+- Read all supplied sources before answering.
+- Do not assume earlier or higher-ranked sources are more factually correct.
+- For factual questions, answer only when a supplied source directly states or unambiguously supports the exact requested fact.
+- Cite only supplied Source ID values from sources that directly support the exact answer.
+- Do not cite a source merely because it is related to the topic.
+- Do not infer, substitute, blend, or generalize facts across different features, examples, or transcript segments.
+- If no supplied source directly supports the exact requested fact, set insufficientContext to true, make answer a short insufficiency explanation, and set citedSourceIds to [].
 
 Question:
 {request.question}
