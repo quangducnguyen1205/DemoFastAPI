@@ -42,6 +42,7 @@ class OllamaAssistantClient:
             "model": settings.ASSISTANT_OLLAMA_MODEL,
             "prompt": self._build_prompt(request),
             "stream": False,
+            "think": False,
             "format": ASSISTANT_RESPONSE_SCHEMA,
             "options": {"temperature": 0},
         }
