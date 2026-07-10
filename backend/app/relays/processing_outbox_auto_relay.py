@@ -18,12 +18,23 @@ def _configure_logging() -> None:
     )
 
 
-def main() -> int:
-    _configure_logging()
+def _auto_relay_configuration_is_valid() -> bool:
     if not settings.PROCESSING_OUTBOX_AUTO_RELAY_ENABLED:
         logger.error(
             "processing outbox auto relay is disabled; set PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true"
         )
+        return False
+    if not settings.PROCESSING_RESULT_PUBLISHER_ENABLED:
+        logger.error(
+            "processing outbox auto relay requires PROCESSING_RESULT_PUBLISHER_ENABLED=true"
+        )
+        return False
+    return True
+
+
+def main() -> int:
+    _configure_logging()
+    if not _auto_relay_configuration_is_valid():
         return 1
 
     Base.metadata.create_all(bind=engine)
