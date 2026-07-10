@@ -44,7 +44,10 @@ class OllamaAssistantClient:
             "stream": False,
             "think": False,
             "format": ASSISTANT_RESPONSE_SCHEMA,
-            "options": {"temperature": 0},
+            "options": {
+                "temperature": 0,
+                "num_predict": settings.ASSISTANT_OLLAMA_NUM_PREDICT,
+            },
         }
         ollama_response, provider_elapsed_ms = self._post_generate(payload)
         return self._parse_structured_response(ollama_response, provider_elapsed_ms)
