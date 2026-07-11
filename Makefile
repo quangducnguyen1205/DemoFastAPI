@@ -1,6 +1,8 @@
 DOCKER ?= docker
 COMPOSE_FILE ?=
 COMPOSE = $(DOCKER) compose $(if $(COMPOSE_FILE),-f $(COMPOSE_FILE),)
+PROJECT3_COMPOSE = $(DOCKER) compose -f docker-compose.yml -f docker-compose.project3.yml
+PROJECT3_SERVICES = db redis backend worker consumer result-relay
 
 BACKEND_SERVICE ?= backend
 WORKER_SERVICE ?= worker
@@ -17,6 +19,7 @@ CONTAINER_SHELL ?= sh -lc 'if command -v bash >/dev/null 2>&1; then exec bash; e
 
 .PHONY: help \
 	up down restart build rebuild logs ps clean pull \
+	project3-up project3-config \
 	backend-up backend-down backend-build backend-rebuild backend-logs backend-shell \
 	worker-up worker-down worker-build worker-rebuild worker-logs worker-shell \
 	consumer-up consumer-down consumer-build consumer-rebuild consumer-logs consumer-shell
@@ -31,6 +34,15 @@ help: ## Show available commands
 	@printf "  CONSUMER_SERVICE  Consumer service name (default: %s)\n" "$(CONSUMER_SERVICE)"
 	@printf "  VOLUMES=1         Remove named volumes when running 'make clean'\n"
 	@printf "  LOGS_ARGS         Override log options, example: LOGS_ARGS='--tail=200'\n\n"
+	@printf "Integrated Project3 targets:\n"
+	@printf "  project3-up       Start the coherent backend/worker/consumer/result-relay topology without building\n"
+	@printf "  project3-config   Render and validate the integrated Compose configuration\n\n"
+
+project3-up: ## Start the coherent Project3 topology without building or pulling images
+	$(PROJECT3_COMPOSE) up $(UP_FLAGS) --no-build --pull never $(PROJECT3_SERVICES)
+
+project3-config: ## Render the coherent Project3 Compose configuration without starting services
+	$(PROJECT3_COMPOSE) config
 
 up: ## Start all active services in detached mode
 	$(COMPOSE) up $(UP_FLAGS)

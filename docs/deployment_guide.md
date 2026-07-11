@@ -7,7 +7,7 @@ This guide covers the processing-only branch of Repo A.
 - `backend`
 - `worker`
 - `consumer`
-- `result-relay` (manual profile; one-shot in base Compose, opt-in automatic with the Project3 overlay)
+- `result-relay` (one-shot/manual in base Compose; automatic and active in the Project3 overlay)
 - `db`
 - `redis`
 
@@ -85,10 +85,10 @@ The consumer commits valid offsets only after successful Celery handoff. Invalid
 
 ## Project3 cross-compose integration
 
-Base `docker-compose.yml` remains usable by itself for standalone/direct-upload development. For the Project3 async path, use the additive overlay:
+Base `docker-compose.yml` remains usable by itself for standalone/direct-upload development. For the coherent Project3 async path, ensure the existing image is available and use:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.project3.yml up -d db redis backend consumer worker
+make project3-up
 ```
 
 Expected local startup order:
@@ -97,7 +97,7 @@ Expected local startup order:
 2. Start DemoFastAPI with both Compose files.
 3. Start the Spring application or run the manual smoke command.
 
-The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. It attaches only `backend`, `consumer`, `worker`, and the manual-profile `result-relay` service to that external network. DemoFastAPI `db` and `redis` stay on the normal local network.
+The target renders both Compose files, starts `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay`, and passes `--no-build`. The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. DemoFastAPI `db` and `redis` stay on the normal local network.
 
 Container-side integration defaults in the overlay are:
 
@@ -142,18 +142,13 @@ PROCESSING_RESULT_PUBLISHER_ENABLED=true \
 docker compose --profile manual run --rm result-relay
 ```
 
-Run the opt-in automatic relay with the Project3 overlay:
+The normal Project3 target starts the automatic relay with both safety gates enabled:
 
 ```bash
-PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true \
-PROCESSING_RESULT_PUBLISHER_ENABLED=true \
-docker compose --profile manual \
-  -f docker-compose.yml \
-  -f docker-compose.project3.yml \
-  up result-relay
+make project3-up
 ```
 
-The automatic relay is a dedicated long-running process, not behavior inside `backend`, `consumer`, or `worker`. It has two safety gates: start the `result-relay` command/service explicitly, and set `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true`. `PROCESSING_RESULT_PUBLISHER_ENABLED=true` is still required for Kafka publication; otherwise the disabled publisher fails explicitly and no fake logging publisher marks rows as published.
+The automatic relay remains a dedicated long-running process, not behavior inside `backend`, `consumer`, or `worker`. The Project3 overlay coherently sets `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true` and `PROCESSING_RESULT_PUBLISHER_ENABLED=true`; the process still validates both gates at startup. Base Compose preserves the disabled one-shot/manual behavior.
 
 The base one-shot relay uses `PROCESSING_OUTBOX_RELAY_ENABLED` and `PROCESSING_OUTBOX_RELAY_BATCH_SIZE`. The automatic relay uses `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED`, `PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS`, and `PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE` while preserving the same retry/max-attempt settings. Invalid auto interval or batch-size values fail at startup.
 

@@ -3,10 +3,11 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
       OBJECT_STORAGE_ENDPOINT_URL: ${PROJECT3_OBJECT_STORAGE_ENDPOINT_URL:-http://minio:9000}
-      ASSISTANT_LLM_ENABLED: ${ASSISTANT_LLM_ENABLED:-false}
+      ASSISTANT_LLM_ENABLED: ${ASSISTANT_LLM_ENABLED:-true}
       ASSISTANT_OLLAMA_BASE_URL: ${ASSISTANT_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      ASSISTANT_OLLAMA_MODEL: ${ASSISTANT_OLLAMA_MODEL:-qwen3:1.7b}
-      ASSISTANT_OLLAMA_TIMEOUT_SECONDS: ${ASSISTANT_OLLAMA_TIMEOUT_SECONDS:-15}
+      ASSISTANT_OLLAMA_MODEL: ${ASSISTANT_OLLAMA_MODEL:-qwen3:4b}
+      ASSISTANT_OLLAMA_TIMEOUT_SECONDS: ${ASSISTANT_OLLAMA_TIMEOUT_SECONDS:-60}
+      ASSISTANT_OLLAMA_NUM_PREDICT: ${ASSISTANT_OLLAMA_NUM_PREDICT:-256}
     networks:
       - default
       - spring-infra
@@ -29,6 +30,7 @@ services:
 
   result-relay:
     # Keep the automatic relay environment narrow; base Compose still owns the one-shot env file.
+    profiles: !reset []
     env_file: !reset []
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${PROJECT3_KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}

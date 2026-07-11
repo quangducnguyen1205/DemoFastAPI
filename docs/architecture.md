@@ -131,7 +131,7 @@ The response contains only:
 }
 ```
 
-`ASSISTANT_LLM_ENABLED=false` keeps the path disabled by default and returns HTTP 503 instead of a fake answer. When enabled later, the only provider path is native-host Ollama through non-streaming `/api/generate` with JSON output requested. No streaming, model switcher, fallback provider, embeddings, persistence, memory, queue, or independent retrieval path is added. P3-F2A is code-contract-only; Ollama installation, `qwen3:1.7b` download, FastAPI runtime smoke, Docker startup, and end-to-end answer verification remain `[CẦN XÁC MINH]` in a later phase.
+Generic settings keep `ASSISTANT_LLM_ENABLED=false` and return HTTP 503 instead of a fake answer. The Project3 overlay coherently enables native-host Ollama with `qwen3:4b`, a 60-second provider deadline, and `num_predict=256`. P3-S2 controlled runtime validation proved structured Pydantic parsing, deterministic provider aliases, canonical mapping, Spring citation acceptance, and frontend citation navigation. No streaming, model switcher, fallback provider, embeddings, persistence, memory, queue, or independent retrieval path is added.
 
 ### Result outbox relay
 

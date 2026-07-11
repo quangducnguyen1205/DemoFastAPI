@@ -16,7 +16,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 - persist processing state, direct-upload transcript rows, and Kafka-originated processing transcript artifacts
 - persist and relay processing result events for Kafka-originated success/failure outcomes when explicitly enabled
 - expose Kafka-originated transcript artifacts to Spring through an internal read-only retrieval endpoint
-- expose one disabled-by-default internal grounded assistant answer endpoint for Spring-approved context
+- expose one internal grounded assistant answer endpoint for Spring-approved context; generic defaults stay disabled while the integrated Project3 topology enables the validated local runtime
 - return transcript results through the existing processing-side contract
 
 ## Not part of this branch
@@ -45,7 +45,7 @@ Kafka consumption is internal and does not add a public HTTP endpoint. The `/int
 
 - `backend`: FastAPI API for upload/status/transcript endpoints
 - `consumer`: Kafka consumer for `asset.processing.requested.v1`
-- `result-relay`: optional relay process for `processing_outbox_events`
+- `result-relay`: automatic relay in the Project3 topology and retained one-shot/manual relay in base Compose
 - `worker`: Celery worker for audio extraction, Whisper transcription, and transcript persistence
 - `db`: PostgreSQL for durable processing state and transcript rows
 - `redis`: Celery broker/result backend
@@ -69,7 +69,7 @@ Both success and failure use the same topic because they are result events for t
 
 The Project3 overlay can also run `result-relay` as a long-running automatic relay process. It has two safety gates: the service/command must be started explicitly, and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true` must be set. Kafka publishing must still be explicitly enabled with `PROCESSING_RESULT_PUBLISHER_ENABLED=true`; otherwise the disabled publisher fails rather than pretending to publish. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified this automatic relay in the fully automatic Spring/FastAPI path: one durable processing result outbox row was published to `asset.processing.result.v1`, no manual one-shot relay was invoked, and Spring applied the result through its automatic listener.
 
-The internal assistant endpoint is disabled by default with `ASSISTANT_LLM_ENABLED=false`. When enabled later, it calls native host Ollama non-streaming and returns only `answer`, `citedSourceIds`, and `insufficientContext`. It does not retrieve context from PostgreSQL, Elasticsearch, MinIO, Kafka, Celery, or Spring APIs. P3-F2A adds code contracts only; it does not install Ollama, download `qwen3:1.7b`, start Docker/FastAPI/Spring, or perform an end-to-end answer smoke.
+Generic source and base-Compose assistant defaults remain disabled. The Project3 overlay enables the runtime-proven local settings (`qwen3:4b`, 60-second provider timeout, `num_predict=256`) and keeps non-streaming structured generation. Controlled P3-S2 validation proved Spring-selected context, FastAPI Pydantic parsing, request-local citation aliases, alias-to-canonical mapping, Spring canonical validation, and frontend citation navigation. FastAPI still performs no independent retrieval and exposes no provider controls to the browser.
 
 ## Quickstart
 
@@ -79,13 +79,15 @@ Run the processing stack:
 docker compose up --build backend worker consumer db redis
 ```
 
-For Project3 cross-service runtime with Spring-owned Kafka and MinIO, start the Spring infrastructure first, then run DemoFastAPI with the integration overlay:
+For the coherent Project3 runtime with Spring-owned Kafka and MinIO, start Spring infrastructure first, ensure the existing FastAPI image is available, then run:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.project3.yml up -d db redis backend consumer worker
+make project3-up
 ```
 
-The base Compose file remains standalone-compatible for direct upload and host-based local development. The overlay joins `backend`, `consumer`, `worker`, and the manual-profile `result-relay` service to the external Spring network `${SPRING_INFRA_NETWORK:-infra_default}`. Container-side integration defaults use `kafka:29092` for Kafka and `http://minio:9000` for services that read MinIO objects; `result-relay` only needs the Kafka/result-outbox side. With the overlay, `result-relay` runs the opt-in automatic relay entrypoint; without the overlay, the base service remains the manual one-shot relay. Use the overlay with an existing runtime image when possible; it does not add a new image, Dockerfile, build target, retry topic, DLQ, or production deployment claim.
+`make project3-up` uses both Compose files and explicitly includes `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay` without building or pulling. The relay receives both required safety gates. Base Compose and `make up` remain standalone-compatible; the one-shot relay and direct-upload endpoints are not removed.
+
+P3-S3.A1 performs static configuration and unit validation only. A fresh integrated runtime fixture remains required before any compatibility path can be deprecated.
 
 Validate runtime wiring:
 
@@ -95,7 +97,7 @@ docker compose config
 docker compose -f docker-compose.yml -f docker-compose.project3.yml config
 ```
 
-This repository intentionally does not maintain automated tests or a separate test image/runtime. The media and ML dependency stack is heavy enough that, for this personal project, validation uses runtime smoke checks, logs, database inspection, and manual integration checks instead. This is a repository-specific trade-off, not a general recommendation for backend services.
+Focused Python unit tests cover assistant structured generation plus processing-event validation, idempotent enqueue behavior, terminal result outbox intent, relay safety gates, and configuration overrides. They mock infrastructure boundaries and do not call Kafka, Celery workers, MinIO, FastAPI HTTP, or Ollama.
 
 ## Compatibility notes
 
@@ -112,9 +114,9 @@ This repository intentionally does not maintain automated tests or a separate te
 - Result outbox rows are also processing artifacts. They record relay state and publication intent, not final product truth.
 - Spring remains the owner of final product transcript snapshots after it retrieves and validates processing artifact rows.
 - Production-grade service-to-service authentication or network policy for internal endpoints is not implemented in this phase.
-- P3-F2A adds a disabled-by-default internal Ollama assistant adapter for Spring-approved context only. Ollama native-host runtime, model download, and end-to-end answer behavior remain future work.
+- Generic mode keeps the internal Ollama adapter disabled. The Project3 overlay enables only the validated local provider values; runtime installation and model availability remain operator prerequisites.
 - P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the fully automatic path: Spring `kafka_request` plus automatic request relay, FastAPI consumer/Celery processing from MinIO, FastAPI automatic result relay, and Spring automatic result listener. Direct upload remained the default product mode and was not exercised; search/indexing stayed disabled.
-- Stuck `publishing` recovery, default cutover away from `direct_upload`, generic all-event relay, production deployment hardening, retry topics, and DLQ handling are future work.
+- Stuck `publishing` recovery, generic all-event relay, production deployment hardening, retry topics, and DLQ handling remain future work. Direct upload and manual relay remain executable rollback paths.
 - This repo currently relies on SQLAlchemy `create_all` rather than Alembic. For personal/local schema changes, local DB data may need to be recreated if an existing database cannot be altered automatically.
 
 ## Documentation
