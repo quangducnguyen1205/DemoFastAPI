@@ -38,9 +38,10 @@ class AssistantLlmUnavailable(RuntimeError):
 class OllamaAssistantClient:
     def answer(self, request: AssistantAnswerRequest) -> AssistantAnswerResponse:
         self._ensure_enabled()
+        source_ids_by_alias = self._source_ids_by_alias(request.sources)
         payload = {
             "model": settings.ASSISTANT_OLLAMA_MODEL,
-            "prompt": self._build_prompt(request),
+            "prompt": self._build_prompt(request, source_ids_by_alias),
             "stream": False,
             "think": False,
             "format": ASSISTANT_RESPONSE_SCHEMA,
@@ -50,7 +51,11 @@ class OllamaAssistantClient:
             },
         }
         ollama_response, provider_elapsed_ms = self._post_generate(payload)
-        return self._parse_structured_response(ollama_response, provider_elapsed_ms)
+        return self._parse_structured_response(
+            ollama_response,
+            provider_elapsed_ms,
+            source_ids_by_alias,
+        )
 
     def _ensure_enabled(self) -> None:
         if not settings.ASSISTANT_LLM_ENABLED:
@@ -98,7 +103,12 @@ class OllamaAssistantClient:
             self._log_provider_failure(event, started_at)
             raise AssistantLlmUnavailable("assistant Ollama request failed") from exc
 
-    def _parse_structured_response(self, ollama_response: dict, provider_elapsed_ms: int) -> AssistantAnswerResponse:
+    def _parse_structured_response(
+        self,
+        ollama_response: dict,
+        provider_elapsed_ms: int,
+        source_ids_by_alias: dict[str, str],
+    ) -> AssistantAnswerResponse:
         response_text = ollama_response.get("response")
         if not isinstance(response_text, str) or not response_text.strip():
             self._log_provider_failure(
@@ -108,7 +118,7 @@ class OllamaAssistantClient:
             )
             raise AssistantLlmUnavailable("assistant Ollama response did not include structured content")
         try:
-            return AssistantAnswerResponse.model_validate_json(response_text)
+            provider_response = AssistantAnswerResponse.model_validate_json(response_text)
         except (ValidationError, ValueError) as exc:
             self._log_provider_failure(
                 self._structured_response_error_event(response_text),
@@ -116,6 +126,7 @@ class OllamaAssistantClient:
                 provider_response=ollama_response,
             )
             raise AssistantLlmUnavailable("assistant Ollama response did not match the answer contract") from exc
+        return self._map_citation_aliases(provider_response, source_ids_by_alias, provider_elapsed_ms)
 
     def _log_provider_failure(
         self,
@@ -223,13 +234,51 @@ class OllamaAssistantClient:
             return "assistant_ollama_invalid_structured_content_json"
         return "assistant_ollama_invalid_structured_response_shape"
 
-    def _build_prompt(self, request: AssistantAnswerRequest) -> str:
-        sources_text = "\n\n".join(self._format_source(source) for source in request.sources)
+    def _map_citation_aliases(
+        self,
+        provider_response: AssistantAnswerResponse,
+        source_ids_by_alias: dict[str, str],
+        provider_elapsed_ms: int,
+    ) -> AssistantAnswerResponse:
+        canonical_source_ids: list[str] = []
+        seen_aliases: set[str] = set()
+        for alias in provider_response.citedSourceIds:
+            if alias not in source_ids_by_alias:
+                self._log_provider_failure(
+                    "assistant_ollama_invalid_citation_aliases",
+                    provider_elapsed_ms=provider_elapsed_ms,
+                )
+                raise AssistantLlmUnavailable("assistant Ollama response included invalid citation aliases")
+            if alias not in seen_aliases:
+                seen_aliases.add(alias)
+                canonical_source_ids.append(source_ids_by_alias[alias])
+
+        if not provider_response.insufficientContext and not canonical_source_ids:
+            self._log_provider_failure(
+                "assistant_ollama_invalid_citation_aliases",
+                provider_elapsed_ms=provider_elapsed_ms,
+            )
+            raise AssistantLlmUnavailable("assistant Ollama response did not include citation aliases")
+
+        return AssistantAnswerResponse(
+            answer=provider_response.answer,
+            citedSourceIds=canonical_source_ids,
+            insufficientContext=provider_response.insufficientContext,
+        )
+
+    def _source_ids_by_alias(self, sources: list[AssistantSource]) -> dict[str, str]:
+        return {f"S{index}": source.sourceId for index, source in enumerate(sources, start=1)}
+
+    def _build_prompt(self, request: AssistantAnswerRequest, source_ids_by_alias: dict[str, str]) -> str:
+        sources_text = "\n\n".join(
+            self._format_source(alias, source)
+            for alias, source in zip(source_ids_by_alias, request.sources, strict=True)
+        )
         if not sources_text:
             sources_text = "No sources were supplied."
         return f"""You are the internal grounded assistant for AI Knowledge Workspace.
 Return exactly one JSON object with this shape:
-{{"answer":"string","citedSourceIds":["source-id"],"insufficientContext":false}}
+{{"answer":"string","citedSourceIds":["S1"],"insufficientContext":false}}
 
 Rules:
 - Answer only from the supplied sources, keep the answer concise, and do not use outside knowledge.
@@ -239,7 +288,8 @@ Evidence selection rules:
 - Read all supplied sources before answering.
 - Do not assume earlier or higher-ranked sources are more factually correct.
 - For factual questions, answer only when a supplied source directly states or unambiguously supports the exact requested fact.
-- Cite only supplied Source ID values from sources that directly support the exact answer.
+- citedSourceIds must contain only supplied SOURCE_ID aliases from sources that directly support the exact answer.
+- Copy supplied SOURCE_ID aliases exactly and never invent an alias.
 - Do not cite a source merely because it is related to the topic.
 - Do not infer, substitute, blend, or generalize facts across different features, examples, or transcript segments.
 - If no supplied source directly supports the exact requested fact, set insufficientContext to true, make answer a short insufficiency explanation, and set citedSourceIds to [].
@@ -251,11 +301,10 @@ Sources:
 {sources_text}
 """
 
-    def _format_source(self, source: AssistantSource) -> str:
+    def _format_source(self, alias: str, source: AssistantSource) -> str:
         return "\n".join([
-            f"Source ID: {source.sourceId}",
+            f"[SOURCE_ID: {alias}]",
             f"Asset title: {source.assetTitle or ''}",
-            f"Transcript row ID: {source.transcriptRowId}",
             f"Segment index: {source.segmentIndex if source.segmentIndex is not None else ''}",
             f"Created at: {source.createdAt or ''}",
             "Context:",
