@@ -156,12 +156,22 @@ class ProcessingSettingsTest(unittest.TestCase):
         self.assertFalse(settings.PROCESSING_RESULT_PUBLISHER_ENABLED)
         self.assertFalse(settings.PROCESSING_OUTBOX_RELAY_ENABLED)
         self.assertFalse(settings.PROCESSING_OUTBOX_AUTO_RELAY_ENABLED)
+        self.assertFalse(settings.PROCESSING_OUTBOX_RECOVERY_ENABLED)
+        self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_INTERVAL_SECONDS, 30)
+        self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS, 60)
+        self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE, 50)
+        self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_MAX_CYCLES, 3)
 
     def test_integrated_overrides_enable_relay_and_validated_assistant_values(self) -> None:
         settings = self._load_settings(
             {
                 "PROCESSING_RESULT_PUBLISHER_ENABLED": "true",
                 "PROCESSING_OUTBOX_AUTO_RELAY_ENABLED": "true",
+                "PROCESSING_OUTBOX_RECOVERY_ENABLED": "true",
+                "PROCESSING_OUTBOX_RECOVERY_INTERVAL_SECONDS": "30",
+                "PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS": "60",
+                "PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE": "50",
+                "PROCESSING_OUTBOX_RECOVERY_MAX_CYCLES": "3",
                 "ASSISTANT_LLM_ENABLED": "true",
                 "ASSISTANT_OLLAMA_MODEL": "qwen3:4b",
                 "ASSISTANT_OLLAMA_TIMEOUT_SECONDS": "60",
@@ -170,10 +180,21 @@ class ProcessingSettingsTest(unittest.TestCase):
         )
         self.assertTrue(settings.PROCESSING_RESULT_PUBLISHER_ENABLED)
         self.assertTrue(settings.PROCESSING_OUTBOX_AUTO_RELAY_ENABLED)
+        self.assertTrue(settings.PROCESSING_OUTBOX_RECOVERY_ENABLED)
         self.assertTrue(settings.ASSISTANT_LLM_ENABLED)
         self.assertEqual(settings.ASSISTANT_OLLAMA_MODEL, "qwen3:4b")
         self.assertEqual(settings.ASSISTANT_OLLAMA_TIMEOUT_SECONDS, 60.0)
         self.assertEqual(settings.ASSISTANT_OLLAMA_NUM_PREDICT, 256)
+
+    def test_invalid_recovery_bounds_fail_configuration(self) -> None:
+        for overrides in (
+            {"PROCESSING_OUTBOX_RECOVERY_INTERVAL_SECONDS": "0"},
+            {"PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS": "0"},
+            {"PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE": "1001"},
+            {"PROCESSING_OUTBOX_RECOVERY_MAX_CYCLES": "101"},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                self._load_settings(overrides)
 
     def _load_settings(self, overrides: dict[str, str]):
         environment = {"DOTENV_PATH": "/tmp/nonexistent-project3-env", **overrides}

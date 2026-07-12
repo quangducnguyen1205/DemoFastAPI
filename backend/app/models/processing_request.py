@@ -6,6 +6,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
     JSON,
     String,
     Text,
@@ -88,6 +89,11 @@ class ProcessingOutboxEvent(Base):
     attempt_count = Column(Integer, nullable=False, default=0)
     next_attempt_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)
+    failure_disposition = Column(String(32), nullable=True, index=True)
+    recovery_cycle_count = Column(Integer, nullable=False, default=0)
+    next_recovery_at = Column(DateTime(timezone=True), nullable=True)
+    last_failure_category = Column(String(128), nullable=True)
+    recovery_exhausted_at = Column(DateTime(timezone=True), nullable=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
@@ -109,5 +115,22 @@ class ProcessingOutboxEvent(Base):
         CheckConstraint(
             "attempt_count >= 0",
             name="ck_processing_outbox_attempt_count_nonnegative",
+        ),
+        CheckConstraint(
+            "recovery_cycle_count >= 0",
+            name="ck_processing_outbox_recovery_cycle_count_nonnegative",
+        ),
+        CheckConstraint(
+            "failure_disposition IS NULL OR failure_disposition IN "
+            "('transient', 'permanent', 'unknown', 'recovery_exhausted')",
+            name="ck_processing_outbox_failure_disposition",
+        ),
+        Index(
+            "idx_processing_outbox_recovery_eligibility",
+            "status",
+            "failure_disposition",
+            "next_recovery_at",
+            "recovery_cycle_count",
+            "created_at",
         ),
     )

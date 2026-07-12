@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app import models as _models  # noqa: F401
 from app.config.settings import settings
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal
+from app.core.schema import initialize_database_schema
 from app.events.asset_processing import EventValidationError, parse_asset_processing_requested_event
 from app.services.processing_requests import ProcessingAcceptance, accept_processing_event
 
@@ -136,7 +137,7 @@ def main() -> None:
         level=settings.LOG_LEVEL,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    Base.metadata.create_all(bind=engine)
+    initialize_database_schema()
     runner = AssetProcessingKafkaConsumer()
     signal.signal(signal.SIGTERM, runner.stop)
     signal.signal(signal.SIGINT, runner.stop)

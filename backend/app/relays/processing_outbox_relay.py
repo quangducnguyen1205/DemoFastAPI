@@ -4,7 +4,8 @@ import sys
 
 from app import models as _models  # noqa: F401
 from app.config.settings import settings
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal
+from app.core.schema import initialize_database_schema
 from app.services.processing_outbox_publisher import build_processing_outbox_publisher
 from app.services.processing_outbox_relay import run_processing_outbox_relay_once
 
@@ -14,7 +15,7 @@ def main() -> int:
         level=settings.LOG_LEVEL,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    Base.metadata.create_all(bind=engine)
+    initialize_database_schema()
 
     publisher = build_processing_outbox_publisher()
     db = SessionLocal()

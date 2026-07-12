@@ -13,7 +13,11 @@ class ProcessingOutboxPublisherError(RuntimeError):
     pass
 
 
-class PublisherDisabledError(ProcessingOutboxPublisherError):
+class PermanentProcessingOutboxPublisherError(ProcessingOutboxPublisherError):
+    pass
+
+
+class PublisherDisabledError(PermanentProcessingOutboxPublisherError):
     pass
 
 
@@ -30,7 +34,7 @@ def _isoformat(dt: datetime) -> str:
 
 def _assert_supported_payload(event: models.ProcessingOutboxEvent, payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
-        raise ProcessingOutboxPublisherError(
+        raise PermanentProcessingOutboxPublisherError(
             f"outbox event payload must be a JSON object event_id={event.id} event_type={event.event_type}"
         )
 
@@ -53,11 +57,11 @@ def _assert_supported_payload(event: models.ProcessingOutboxEvent, payload: Any)
     }
     allowed_keys = allowed_keys_by_type.get(event.event_type)
     if allowed_keys is None:
-        raise ProcessingOutboxPublisherError(f"unsupported outbox event_type={event.event_type}")
+        raise PermanentProcessingOutboxPublisherError(f"unsupported outbox event_type={event.event_type}")
 
     extra_keys = set(payload) - allowed_keys
     if extra_keys:
-        raise ProcessingOutboxPublisherError(
+        raise PermanentProcessingOutboxPublisherError(
             f"outbox event payload contains unsupported keys event_id={event.id} keys={sorted(extra_keys)}"
         )
     return payload

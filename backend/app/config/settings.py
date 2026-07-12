@@ -39,6 +39,13 @@ def _env_positive_int(name: str, default: int) -> int:
     return value
 
 
+def _env_bounded_positive_int(name: str, default: int, maximum: int) -> int:
+    value = _env_positive_int(name, default)
+    if value > maximum:
+        raise ValueError(f"{name} must be <= {maximum}")
+    return value
+
+
 def _env_float(name: str, default: float) -> float:
     val = _env(name)
     if val is None:
@@ -98,6 +105,27 @@ class Settings:
     PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE: int = _env_positive_int(
         "PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE",
         10,
+    )
+    PROCESSING_OUTBOX_RECOVERY_ENABLED: bool = _env_bool("PROCESSING_OUTBOX_RECOVERY_ENABLED", False)
+    PROCESSING_OUTBOX_RECOVERY_INTERVAL_SECONDS: int = _env_bounded_positive_int(
+        "PROCESSING_OUTBOX_RECOVERY_INTERVAL_SECONDS",
+        30,
+        86_400,
+    )
+    PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS: int = _env_bounded_positive_int(
+        "PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS",
+        60,
+        604_800,
+    )
+    PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE: int = _env_bounded_positive_int(
+        "PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE",
+        50,
+        1_000,
+    )
+    PROCESSING_OUTBOX_RECOVERY_MAX_CYCLES: int = _env_bounded_positive_int(
+        "PROCESSING_OUTBOX_RECOVERY_MAX_CYCLES",
+        3,
+        100,
     )
 
     # S3-compatible object storage for Spring-owned media references.

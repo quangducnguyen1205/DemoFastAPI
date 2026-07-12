@@ -69,6 +69,8 @@ Both success and failure use the same topic because they are result events for t
 
 The Project3 overlay can also run `result-relay` as a long-running automatic relay process. It has two safety gates: the service/command must be started explicitly, and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true` must be set. Kafka publishing must still be explicitly enabled with `PROCESSING_RESULT_PUBLISHER_ENABLED=true`; otherwise the disabled publisher fails rather than pretending to publish. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified this automatic relay in the fully automatic Spring/FastAPI path: one durable processing result outbox row was published to `asset.processing.result.v1`, no manual one-shot relay was invoked, and Spring applied the result through its automatic listener.
 
+The same Project3 relay process now performs bounded failed-outbox reconciliation before each normal relay iteration. Only rows whose terminal publication failure was classified from typed exception data as `transient` are eligible, after a 60-second cooldown and for at most three recovery cycles. Requeue is an atomic compare-and-set back to the existing `pending` path, resets the five normal publication attempts, and preserves event identity and payload. Serialization/event-construction failures are `permanent`; unrecognized and historical failures are `unknown`; rows that exhaust the recovery budget become `recovery_exhausted`. Those terminal categories are never automatically replayed. Generic and one-shot operation keep reconciliation disabled unless explicitly configured.
+
 Generic source and base-Compose assistant defaults remain disabled. The Project3 overlay enables the runtime-proven local settings (`qwen3:4b`, 60-second provider timeout, `num_predict=256`) and keeps non-streaming structured generation. Controlled P3-S2 validation proved Spring-selected context, FastAPI Pydantic parsing, request-local citation aliases, alias-to-canonical mapping, Spring canonical validation, and frontend citation navigation. FastAPI still performs no independent retrieval and exposes no provider controls to the browser.
 
 ## Quickstart
@@ -120,12 +122,13 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
 - FastAPI treats Kafka as transport and MinIO object keys as references; product metadata, authorization, workspace state, and final product status remain owned by Repo B.
 - Kafka-originated transcript rows are processing artifacts that support later completion events back to Spring; they are not product truth.
 - Result outbox rows are also processing artifacts. They record relay state and publication intent, not final product truth.
+- Historical failed result-outbox rows are upgraded as `unknown` and remain terminal for manual review; the schema upgrader never infers transient safety from an old free-form error.
 - Spring remains the owner of final product transcript snapshots after it retrieves and validates processing artifact rows.
 - Production-grade service-to-service authentication or network policy for internal endpoints is not implemented in this phase.
 - Generic mode keeps the internal Ollama adapter disabled. The Project3 overlay enables only the validated local provider values; runtime installation and model availability remain operator prerequisites.
 - P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the fully automatic path: Spring `kafka_request` plus automatic request relay, FastAPI consumer/Celery processing from MinIO, FastAPI automatic result relay, and Spring automatic result listener. Direct upload remained the default product mode and was not exercised; search/indexing stayed disabled.
-- Stuck `publishing` recovery, generic all-event relay, production deployment hardening, retry topics, and DLQ handling remain future work. Direct upload and manual relay remain executable rollback paths.
-- This repo currently relies on SQLAlchemy `create_all` rather than Alembic. For personal/local schema changes, local DB data may need to be recreated if an existing database cannot be altered automatically.
+- Stuck `publishing` recovery, generic all-event relay, production deployment hardening, retry topics, and a full Kafka DLQ remain future work. Direct upload and manual relay remain executable rollback paths.
+- This repo still uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables and applies a narrow idempotent processing-outbox column/index upgrade for existing local databases; historical terminal failures are classified `unknown` instead of being replayed.
 
 ## Documentation
 

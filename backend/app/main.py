@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 load_dotenv(dotenv_path=os.getenv("DOTENV_PATH", ".env"), override=False)
 
 from app.routers import internal_assistant, internal_processing, videos
-from app.core.database import engine, Base
+from app.core.schema import initialize_database_schema
 from app.config.settings import settings
 # Ensure models are imported so SQLAlchemy registers tables
 from app import models as _models  # noqa: F401
@@ -24,7 +24,7 @@ def create_tables():
     max_retries = 30
     for i in range(max_retries):
         try:
-            Base.metadata.create_all(bind=engine)
+            initialize_database_schema()
             print("Database tables created successfully")
             break
         except Exception as e:

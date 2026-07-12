@@ -161,9 +161,11 @@ Rules:
 - on success it sets `published`, `published_at`, clears retry fields, and commits;
 - on failure it increments `attempt_count`, stores a bounded safe `last_error`, and either returns to `pending` with `next_attempt_at` or transitions to `failed` after max attempts.
 
+Terminal publication failures also store a low-cardinality disposition: `transient`, `permanent`, `unknown`, or `recovery_exhausted`. The Project3 automatic relay reconciles only due transient rows below the configured recovery-cycle limit. It atomically returns them to the existing `pending` state, increments the recovery cycle, resets the normal attempt counter, and preserves the original event identity, key, and payload. Permanent, unknown, historical, and recovery-exhausted rows remain terminal for operator review.
+
 The manual relay is disabled by default and is not scheduled. It can be invoked once through `python -m app.relays.processing_outbox_relay` or the base Compose `result-relay` profile with `PROCESSING_OUTBOX_RELAY_ENABLED=true`.
 
-The Project3 overlay can run `result-relay` as a long-running automatic relay process with `python -m app.relays.processing_outbox_auto_relay`. That process has two safety gates: the command/service must be started explicitly, and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true` must be set. It runs bounded iterations using `PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE`, sleeps for `PROCESSING_OUTBOX_AUTO_RELAY_INTERVAL_SECONDS`, and logs aggregate iteration counts only when rows were claimed, retried, or terminally failed. It remains stateless between iterations except for PostgreSQL state.
+The Project3 overlay can run `result-relay` as a long-running automatic relay process with `python -m app.relays.processing_outbox_auto_relay`. That process has two publication safety gates: the command/service must be started explicitly, and `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true` must be set. It runs bounded iterations using `PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE`, performs enabled reconciliation before normal relay work, sleeps for the configured intervals, and logs aggregate counts only when work occurred. It remains stateless between iterations except for PostgreSQL state.
 
 Both relay modes use the same publisher boundary. There is no logging publisher that pretends to publish; if Kafka publishing is disabled, the publisher fails explicitly.
 
@@ -173,7 +175,7 @@ The automatic relay does not live inside `backend`, `consumer`, or `worker`, and
 
 P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified this process as part of the fully automatic runtime path: the overlay `result-relay` service published one selected durable result outbox row after the consumer and Celery worker processed a Spring-owned MinIO object, and Spring's automatic result listener applied the result. No base one-shot result relay was invoked. Direct upload remained the product default and was not exercised; indexing/search stayed disabled.
 
-Stuck `publishing` recovery after process interruption is not implemented yet. DLQ and parking-topic handling are also future work. Publication is at-least-once, not end-to-end exactly-once, because a relay process can publish and then crash before marking the outbox row `published`. Spring consumers must be idempotent by result `eventId`.
+Stuck `publishing` recovery after process interruption is not implemented. A full Kafka DLQ or parking topic is also not present. Publication is at-least-once, not end-to-end exactly-once, because a relay process can publish and then crash before marking the outbox row `published`. Spring consumers must remain idempotent by result `eventId`; bounded failed-row reconciliation does not bypass that boundary.
 
 ## Persistence boundary
 
@@ -197,13 +199,13 @@ Repo A intentionally keeps only processing-oriented state:
 - `processing_outbox_events`
   - result-event relay state for Kafka-originated processing completion/failure
   - unique `(causation_event_id, event_type)` to prevent duplicate outbox intent from duplicate task execution
-  - publish bookkeeping fields for the result relay: `status`, `attempt_count`, `next_attempt_at`, `last_error`, and `published_at`
+  - publish bookkeeping plus bounded recovery metadata: status/attempt timing, safe failure disposition/category, recovery cycle/eligibility, recovery exhaustion, and publication time
 
 Repo A does not own product auth, user identity, asset metadata, search indexes, or workspace/business logic in this branch. Kafka is transport, not a transfer of product-state ownership.
 
 Kafka-originated transcript and outbox rows are processing artifacts. They support later completion/failure event publishing back to Spring but do not make FastAPI the product source of truth.
 
-This repo currently uses SQLAlchemy `create_all` instead of Alembic. New local/personal databases get the new tables automatically; existing local DB data may need to be recreated if schema changes cannot be applied automatically.
+This repo uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables and applies an idempotent narrow upgrade for the processing-result outbox recovery columns and index. Existing historical failed rows are marked `unknown` and are not automatically replayed.
 
 ## Removed from active runtime
 

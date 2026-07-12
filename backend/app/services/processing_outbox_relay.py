@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config.settings import settings
-from app.services.processing_outbox import safe_error_message
+from app.services.processing_outbox_failure import (
+    PublicationFailureClassification,
+    PublicationFailureDisposition,
+    classify_publication_failure,
+)
 from app.services.processing_outbox_publisher import (
     ProcessingOutboxPublisher,
     build_processing_outbox_publisher,
@@ -93,6 +97,10 @@ def _mark_published(db: Session, event: models.ProcessingOutboxEvent, now: datet
     publishing_event.published_at = now
     publishing_event.next_attempt_at = None
     publishing_event.last_error = None
+    publishing_event.failure_disposition = None
+    publishing_event.next_recovery_at = None
+    publishing_event.last_failure_category = None
+    publishing_event.recovery_exhausted_at = None
     publishing_event.updated_at = now
     db.commit()
     return True
@@ -101,7 +109,7 @@ def _mark_published(db: Session, event: models.ProcessingOutboxEvent, now: datet
 def _mark_publish_failed(
     db: Session,
     event: models.ProcessingOutboxEvent,
-    exc: Exception,
+    classification: PublicationFailureClassification,
     now: datetime,
 ) -> bool | None:
     publishing_event = (
@@ -116,16 +124,34 @@ def _mark_publish_failed(
 
     attempts = (publishing_event.attempt_count or 0) + 1
     publishing_event.attempt_count = attempts
-    publishing_event.last_error = safe_error_message(exc)
+    publishing_event.last_error = classification.safe_category
+    publishing_event.last_failure_category = classification.safe_category
     publishing_event.updated_at = now
+    publishing_event.recovery_exhausted_at = None
     if attempts >= settings.PROCESSING_OUTBOX_RELAY_MAX_ATTEMPTS:
         publishing_event.status = "failed"
         publishing_event.next_attempt_at = None
+        recovery_cycles = publishing_event.recovery_cycle_count or 0
+        if classification.disposition == PublicationFailureDisposition.TRANSIENT:
+            if recovery_cycles >= settings.PROCESSING_OUTBOX_RECOVERY_MAX_CYCLES:
+                publishing_event.failure_disposition = PublicationFailureDisposition.RECOVERY_EXHAUSTED.value
+                publishing_event.next_recovery_at = None
+                publishing_event.recovery_exhausted_at = now
+            else:
+                publishing_event.failure_disposition = PublicationFailureDisposition.TRANSIENT.value
+                publishing_event.next_recovery_at = now + timedelta(
+                    seconds=settings.PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS
+                )
+        else:
+            publishing_event.failure_disposition = classification.disposition.value
+            publishing_event.next_recovery_at = None
         db.commit()
         return False
 
     publishing_event.status = "pending"
     publishing_event.next_attempt_at = now + timedelta(seconds=settings.PROCESSING_OUTBOX_RELAY_RETRY_DELAY_SECONDS)
+    publishing_event.failure_disposition = None
+    publishing_event.next_recovery_at = None
     db.commit()
     return True
 
@@ -165,14 +191,14 @@ def run_processing_outbox_relay_once(
             else:
                 skipped += 1
         except Exception as exc:
+            classification = classify_publication_failure(exc)
             logger.warning(
-                "processing outbox publish failed event_id=%s event_type=%s attempt_count=%s error=%s",
-                event.id,
-                event.event_type,
+                "processing outbox publish failed disposition=%s category=%s attempt_count=%s",
+                classification.disposition.value,
+                classification.safe_category,
                 event.attempt_count,
-                safe_error_message(exc),
             )
-            will_retry = _mark_publish_failed(db, event, exc, _utc_now())
+            will_retry = _mark_publish_failed(db, event, classification, _utc_now())
             if will_retry is None:
                 skipped += 1
             elif will_retry:
