@@ -55,7 +55,7 @@ This compose file does not start Kafka or MinIO. Those are expected to be availa
 curl http://localhost:8000/health
 ```
 
-2. Upload a video:
+2. For standalone compatibility only, invoke the deprecated but functional direct endpoint:
 
 ```bash
 curl -X POST http://localhost:8000/videos/upload \
@@ -90,6 +90,17 @@ Base `docker-compose.yml` remains usable by itself for standalone/direct-upload 
 ```bash
 make project3-up
 ```
+
+New Project3 integrations must use this Kafka consumer topology. The direct endpoint remains available for rollback and generic standalone use during its deprecation period; no removal date is assigned.
+
+Migration from the old normal local flow is:
+
+```text
+old: compatibility/direct upload -> TRANSCRIPT_READY -> explicit Index transcript
+new: make project3-up + Spring make run -> upload -> automatic processing -> automatic indexing -> SEARCHABLE
+```
+
+Explicit indexing recovery, one-shot/manual relays, and exact-ID recovery remain supported and are not deprecated.
 
 Expected local startup order:
 

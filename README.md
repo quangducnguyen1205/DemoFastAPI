@@ -11,7 +11,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 ## Active responsibility
 
 - consume `asset.processing.requested.v1` from Kafka for Spring-owned assets
-- accept media uploads from Repo B through the transitional direct-upload endpoint
+- retain the deprecated direct-upload endpoint for Spring rollback compatibility and generic standalone use
 - enqueue and run transcription processing
 - persist processing state, direct-upload transcript rows, and Kafka-originated processing transcript artifacts
 - persist and relay processing result events for Kafka-originated success/failure outcomes when explicitly enabled
@@ -32,7 +32,7 @@ This branch intentionally removes product/demo/search responsibilities from Repo
 
 - `GET /`
 - `GET /health`
-- `POST /videos/upload`
+- `POST /videos/upload` (deprecated in OpenAPI, still functional)
 - `GET /videos/tasks/{task_id}`
 - `GET /videos/{video_id}`
 - `GET /videos/{video_id}/transcript`
@@ -87,7 +87,7 @@ make project3-up
 
 `make project3-up` uses both Compose files and explicitly includes `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay` without building or pulling. The relay receives both required safety gates. Base Compose and `make up` remain standalone-compatible; the one-shot relay and direct-upload endpoints are not removed.
 
-P3-S3.A1 performs static configuration and unit validation only. A fresh integrated runtime fixture remains required before any compatibility path can be deprecated.
+The controlled local observation campaign supports documented deprecation of the Spring direct-processing compatibility path, but it does not claim production-scale stability. New Project3 integrations must use the Kafka consumer path.
 
 Validate runtime wiring:
 
@@ -99,9 +99,17 @@ docker compose -f docker-compose.yml -f docker-compose.project3.yml config
 
 Focused Python unit tests cover assistant structured generation plus processing-event validation, idempotent enqueue behavior, terminal result outbox intent, relay safety gates, and configuration overrides. They mock infrastructure boundaries and do not call Kafka, Celery workers, MinIO, FastAPI HTTP, or Ollama.
 
+## Direct processing deprecation
+
+`POST /videos/upload` is deprecated in FastAPI/OpenAPI metadata but remains fully functional. Each invocation emits one safe warning stating that the endpoint is retained for rollback compatibility and that the Project3 Kafka consumer is the replacement. The warning contains no file name, title, owner, task, account, credential, or payload data.
+
+No removal date is assigned. The endpoint continues to preserve the same path, multipart request, response fields, status behavior, file persistence, database writes, and Celery enqueue behavior. It remains available for the Spring `compatibility` profile and generic standalone FastAPI use outside Project3 integration. Removal requires a completed deprecation window, caller and standalone-use audits, replacement observation evidence, a rollback plan, and a separate removal decision.
+
+Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legacy session authentication are outside this deprecation scope.
+
 ## Compatibility notes
 
-- `POST /videos/upload` still returns `{task_id, status, video_id}`.
+- Deprecated `POST /videos/upload` still returns `{task_id, status, video_id}` and remains callable by Spring rollback mode.
 - `GET /videos/tasks/{task_id}` still mirrors Celery task state.
 - `GET /videos/{video_id}/transcript` still returns ordered transcript rows by `segment_index`.
 - `GET /internal/processing-requests/{processingRequestId}/transcript-rows` returns Kafka-originated processing artifact rows ordered by `segment_index`. It returns `404` for unknown processing requests and `409` when a request is failed, not ready, or ready without usable transcript artifacts.

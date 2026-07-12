@@ -17,16 +17,22 @@ from app.tasks.video_tasks import process_video_task
 from app.config.settings import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 timing_logger = logging.getLogger("uvicorn.error")
+DIRECT_PROCESSING_DEPRECATION_WARNING = (
+    "event=direct_processing_endpoint_deprecated "
+    "retained_for=rollback_compatibility replacement=project3_kafka_consumer"
+)
 
 
-@router.post("/upload")
+@router.post("/upload", deprecated=True)
 async def upload_video(
     file: UploadFile = File(...),
     title: str = Form(...),
     owner_id: int | None = Form(None),
     db: Session = Depends(get_db)
 ):
+    logger.warning(DIRECT_PROCESSING_DEPRECATION_WARNING)
     upload_started_at = time.perf_counter()
 
     # Validate MIME type

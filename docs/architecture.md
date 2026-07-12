@@ -41,7 +41,9 @@ The overlay attaches only `backend`, `consumer`, `worker`, and the manual-profil
 
 ## End-to-end flow
 
-### Transitional direct-upload flow
+### Deprecated, functional direct-upload flow
+
+This flow is deprecated for normal Project3 integration. The route is marked deprecated in OpenAPI and emits a safe invocation warning, but its request, response, storage, database, and Celery behavior are unchanged. It remains supported temporarily for Spring rollback mode and generic standalone FastAPI use. The replacement for Project3 is the Kafka consumer path, and no removal date is assigned.
 
 1. `POST /videos/upload` stores the file under `MEDIA_ROOT/videos/`.
 2. The API inserts a `videos` row and sets `status="processing"`.
