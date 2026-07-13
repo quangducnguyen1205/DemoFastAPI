@@ -2,7 +2,6 @@ from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.processing.adapters.celery_dispatcher import CeleryProcessingTaskDispatcher
-from app.processing.adapters.legacy_result_sink import SqlAlchemyLegacyProcessingResultSink
 from app.processing.adapters.media_source import ObjectStorageProcessingMediaSource
 from app.processing.adapters.sqlalchemy_stores import (
     SqlAlchemyDirectUploadArtifactStore,
@@ -16,6 +15,8 @@ from app.processing.application.execute import (
     ExecuteProcessingApplicationService,
 )
 from app.services.object_storage import get_object_storage_client
+from app.result_delivery.adapters.sqlalchemy_repository import SqlAlchemyProcessingResultOutboxRepository
+from app.result_delivery.application.record_result import RecordProcessingResultApplicationService
 
 
 def build_processing_dispatch_service(
@@ -36,7 +37,9 @@ def build_processing_execution_service() -> ExecuteProcessingApplicationService:
         media_source=ObjectStorageProcessingMediaSource(get_object_storage_client()),
         transcriber=WhisperProcessingTranscriptionProvider(),
         artifact_store=store,
-        result_sink=SqlAlchemyLegacyProcessingResultSink(db),
+        result_sink=RecordProcessingResultApplicationService(
+            SqlAlchemyProcessingResultOutboxRepository(db)
+        ),
     )
 
 

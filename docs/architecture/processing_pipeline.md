@@ -57,6 +57,46 @@ Its filesystem write, legacy `videos` row, and `process_video` dispatch now live
 adapter. The direct worker task invokes a compatibility-specific use case and retains the
 same task name, polling contract, local paths, transcript chunk format, and status writes.
 
+## Canonical result recording and event codec
+
+`RecordProcessingResultApplicationService` is the only processing-outcome-to-result-intent
+mapper. It accepts `ProcessingSucceeded` or `ProcessingFailed`, creates the unchanged
+`transcript.ready` or `asset.processing.failed` version 1 payload, applies the existing
+bounded error sanitization, and appends one durable intent. It never publishes Kafka.
+
+`ProcessingResultEventCodec` owns the transport envelope and allowed payload fields. It
+accepts the result feature's neutral event rather than an ORM row. The Kafka publisher owns
+topic/client configuration, `acks=all`, producer idempotence, the existing send timeout, and
+translation of typed Kafka failures into transport-neutral transient/permanent failures.
+
+## Durable outbox, relay, and reconciliation
+
+`SqlAlchemyProcessingResultOutboxRepository` is the only adapter that maps neutral result
+events to `processing_outbox_events` and executes its state transitions. It owns idempotent
+append, due selection, conditional `pending -> publishing` claim, published finalization,
+normal retry/terminal failure recording, cooled-down failed-row selection, and atomic bounded
+requeue. ORM models and sessions are not exposed to processing or result-delivery application
+services.
+
+`RelayProcessingResultsApplicationService` is used by both the manual one-shot command and
+the automatic process. It claims, publishes through the neutral port, and finalizes or
+classifies a failure through the same repository operations. The application service keeps
+the existing five-attempt normal relay and configured retry/cooldown/recovery policy values.
+
+`ReconcileFailedProcessingResultsApplicationService` selects only due `transient` rows below
+the recovery-cycle limit and conditionally requeues them into the existing pending path.
+Permanent, unknown, historical-unclassified, and `recovery_exhausted` rows remain terminal.
+This behavior remains separate from Celery retry behavior.
+
+The stable `app.services.processing_outbox*` module paths remain as thin compatibility
+imports for existing tests and relay commands; they contain no independent event serializer,
+publisher, state machine, or query implementation. Automatic and one-shot relay entrypoints
+still keep their existing module/Compose commands.
+
+Crash-age recovery for rows abandoned in `publishing` was not added because the pre-refactor
+runtime had no safe age threshold or frozen configuration for it. It remains explicit debt
+rather than changing recovery behavior during this refactor.
+
 The old public module paths needed by Docker, Compose, Celery discovery, and HTTP routing are
-retained as thin entrypoints. Result delivery and runtime composition are documented as their
-feature boundaries land in the next P3-S5.B3 commits.
+retained as thin entrypoints. Runtime composition is documented as its feature boundary lands
+in the final P3-S5.B3 commit.

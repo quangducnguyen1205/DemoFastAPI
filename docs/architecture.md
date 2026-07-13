@@ -21,9 +21,10 @@ Repo A is the internal processing service.
 | Celery app | `backend/app/core/celery_app.py` | Queue orchestration for background processing. |
 | Worker task | `backend/app/tasks/video_tasks.py` | Extract audio, transcribe, chunk transcript text, persist direct-upload transcripts, update processing state, and persist result outbox intent for Kafka-originated work. |
 | Object storage | `backend/app/services/object_storage.py` | S3-compatible MinIO access used by workers to download Spring-owned media objects. |
-| Processing outbox | `backend/app/services/processing_outbox.py` | Builds internal result-event contracts and inserts pending outbox rows in the worker transaction. |
-| Result publisher | `backend/app/services/processing_outbox_publisher.py` | Builds result envelopes and publishes to Kafka when explicitly enabled. |
-| Result relay | `backend/app/services/processing_outbox_relay.py`, `backend/app/relays/processing_outbox_relay.py`, `backend/app/relays/processing_outbox_auto_relay.py` | Manual one-shot relay plus opt-in automatic relay process. Both reuse the same durable claim/publish/retry state machine. |
+| Result recording | `backend/app/result_delivery/application/record_result.py` | Maps one neutral processing outcome to one durable result intent in the worker transaction. |
+| Result event codec and publisher | `backend/app/result_delivery/adapters/event_codec.py`, `backend/app/result_delivery/adapters/kafka_publisher.py` | Own the frozen result envelope and opt-in Kafka delivery configuration. |
+| Result outbox | `backend/app/result_delivery/adapters/sqlalchemy_repository.py` | Owns durable append, claim/finalize/failure, and bounded recovery persistence operations. |
+| Result relay and reconciliation | `backend/app/result_delivery/application/relay.py`, `backend/app/result_delivery/application/reconcile.py`, `backend/app/relays/processing_outbox_relay.py`, `backend/app/relays/processing_outbox_auto_relay.py` | Manual one-shot relay plus opt-in automatic relay/reconciliation process. Both reuse the same delivery service and state machine. |
 | Processing helpers | `backend/app/services/video_processing.py` | ffmpeg extraction, Whisper access, transcript chunking, and transcript persistence. |
 | Persistence | `backend/app/models/video.py`, `backend/app/models/transcript.py`, `backend/app/models/processing_request.py` | Durable direct-upload processing state, transcript rows, Kafka idempotency records, Kafka-originated transcript artifacts, and pending result outbox rows. |
 

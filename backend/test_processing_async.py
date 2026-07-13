@@ -114,7 +114,10 @@ class ProcessingResultOutboxTest(unittest.TestCase):
 
         event = add_transcript_ready_event(db, processing_request=request, segment_count=3)
 
-        db.add.assert_called_once_with(event)
+        db.add.assert_called_once()
+        persisted = db.add.call_args.args[0]
+        self.assertEqual(persisted.id, event.id)
+        self.assertEqual(persisted.payload, event.payload)
         self.assertEqual(event.event_type, "transcript.ready")
         self.assertEqual(event.causation_event_id, request.event_id)
         self.assertEqual(event.payload["status"], "ready")

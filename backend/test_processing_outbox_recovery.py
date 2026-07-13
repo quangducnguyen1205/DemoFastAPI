@@ -9,7 +9,6 @@ from app import models
 from app.core.database import Base
 from app.core.schema import ensure_processing_outbox_recovery_schema
 from app.relays import processing_outbox_auto_relay
-from app.services import processing_outbox_failure as failure
 from app.services.processing_outbox_failure import (
     PublicationFailureClassification,
     PublicationFailureDisposition,
@@ -18,6 +17,7 @@ from app.services.processing_outbox_failure import (
 from app.services.processing_outbox_publisher import (
     PermanentProcessingOutboxPublisherError,
 )
+from app.result_delivery.domain.failures import TransientProcessingResultPublisherError
 from app.services.processing_outbox_recovery import (
     _requeue_failed_event,
     is_recovery_eligible,
@@ -52,22 +52,18 @@ def new_event(event_id: str = "event-1") -> models.ProcessingOutboxEvent:
 
 class PublicationFailureClassifierTest(unittest.TestCase):
     def test_typed_broker_timeout_connection_and_wrapped_failures_are_transient(self) -> None:
-        class FakeNoBrokersAvailable(Exception):
-            pass
-
-        broker_failure = FakeNoBrokersAvailable("unavailable")
-        with patch.object(failure, "_KAFKA_TRANSIENT_TYPES", (FakeNoBrokersAvailable,)):
+        broker_failure = TransientProcessingResultPublisherError("unavailable")
+        self.assertEqual(
+            classify_publication_failure(broker_failure).disposition,
+            PublicationFailureDisposition.TRANSIENT,
+        )
+        try:
+            raise RuntimeError("wrapper") from broker_failure
+        except RuntimeError as wrapped:
             self.assertEqual(
-                classify_publication_failure(broker_failure).disposition,
+                classify_publication_failure(wrapped).disposition,
                 PublicationFailureDisposition.TRANSIENT,
             )
-            try:
-                raise RuntimeError("wrapper") from broker_failure
-            except RuntimeError as wrapped:
-                self.assertEqual(
-                    classify_publication_failure(wrapped).disposition,
-                    PublicationFailureDisposition.TRANSIENT,
-                )
 
         self.assertEqual(
             classify_publication_failure(TimeoutError()).disposition,
