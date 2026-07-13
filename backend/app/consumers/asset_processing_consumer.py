@@ -12,7 +12,8 @@ from app.config.settings import settings
 from app.core.database import SessionLocal
 from app.core.schema import initialize_database_schema
 from app.events.asset_processing import EventValidationError, parse_asset_processing_requested_event
-from app.services.processing_requests import ProcessingAcceptance, accept_processing_event
+from app.processing.application.dispatch import ProcessingAcceptance
+from app.processing.composition import build_processing_dispatch_service
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +62,15 @@ def handle_asset_processing_message(raw_value: bytes | str | dict, db: Session) 
         )
         return MessageHandlingResult(accepted=False, duplicate=False, rejected=True, reason=str(exc))
 
-    acceptance: ProcessingAcceptance = accept_processing_event(db, event)
+    acceptance: ProcessingAcceptance = build_processing_dispatch_service(db).dispatch(
+        event.to_processing_command()
+    )
     return MessageHandlingResult(
         accepted=acceptance.accepted,
         duplicate=acceptance.duplicate,
         rejected=False,
         event_id=acceptance.event_id,
-        celery_task_id=acceptance.celery_task_id,
+        celery_task_id=acceptance.task_id,
     )
 
 

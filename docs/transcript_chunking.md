@@ -21,7 +21,7 @@ Implementation lives in:
 
 - `backend/app/utils.py`
 - `backend/app/services/video_processing.py`
-- `backend/app/tasks/video_tasks.py`
+- `backend/app/processing/adapters/whisper_transcriber.py`
 
 ## Why this shape still exists
 

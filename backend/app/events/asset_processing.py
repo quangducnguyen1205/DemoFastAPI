@@ -3,6 +3,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from app.processing.domain.models import ProcessingRequestCommand
+
 
 EXPECTED_EVENT_TYPE = "asset.processing.requested"
 EXPECTED_EVENT_VERSION = 1
@@ -72,6 +74,25 @@ class AssetProcessingRequestedEvent(BaseModel):
 
     def to_celery_payload(self) -> dict[str, Any]:
         return self.payload.to_celery_payload(self.eventId)
+
+    def to_processing_command(self) -> ProcessingRequestCommand:
+        return ProcessingRequestCommand(
+            event_id=self.eventId,
+            event_type=self.eventType,
+            event_version=self.eventVersion,
+            aggregate_type=self.aggregateType,
+            aggregate_id=self.aggregateId,
+            occurred_at=self.occurredAt,
+            asset_id=self.payload.assetId,
+            workspace_id=self.payload.workspaceId,
+            owner_id=self.payload.ownerId,
+            storage_bucket=self.payload.storageBucket,
+            object_key=self.payload.objectKey,
+            original_filename=self.payload.originalFilename,
+            content_type=self.payload.contentType,
+            size_bytes=self.payload.sizeBytes,
+            requested_at=self.payload.requestedAt,
+        )
 
 
 def parse_asset_processing_requested_event(raw_event: bytes | str | dict[str, Any]) -> AssetProcessingRequestedEvent:

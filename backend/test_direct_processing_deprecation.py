@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from app.routers import videos
+from app.processing.adapters import direct_upload_compatibility
 
 
 class DirectProcessingRouteDeprecationTest(unittest.IsolatedAsyncioTestCase):
@@ -29,8 +30,12 @@ class DirectProcessingRouteDeprecationTest(unittest.IsolatedAsyncioTestCase):
         expected_response = {"task_id": "synthetic-task", "status": "processing", "video_id": 1}
 
         with (
-            patch.object(videos, "run_in_threadpool", new=AsyncMock(return_value=expected_response)) as threadpool,
-            self.assertLogs(videos.logger.name, level="WARNING") as captured,
+            patch.object(
+                direct_upload_compatibility,
+                "run_in_threadpool",
+                new=AsyncMock(return_value=expected_response),
+            ) as threadpool,
+            self.assertLogs(direct_upload_compatibility.logger.name, level="WARNING") as captured,
         ):
             response = await videos.upload_video(
                 file=file,
@@ -43,7 +48,11 @@ class DirectProcessingRouteDeprecationTest(unittest.IsolatedAsyncioTestCase):
         threadpool.assert_awaited_once()
         self.assertEqual(
             captured.output,
-            [f"WARNING:{videos.logger.name}:{videos.DIRECT_PROCESSING_DEPRECATION_WARNING}"],
+            [
+                "WARNING:"
+                f"{direct_upload_compatibility.logger.name}:"
+                f"{videos.DIRECT_PROCESSING_DEPRECATION_WARNING}"
+            ],
         )
         self.assertNotIn("Synthetic title", captured.output[0])
         self.assertNotIn("synthetic-video.mp4", captured.output[0])
