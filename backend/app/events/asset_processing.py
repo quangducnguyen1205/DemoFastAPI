@@ -33,19 +33,6 @@ class AssetProcessingRequestedPayload(BaseModel):
             raise ValueError("must not be blank")
         return stripped
 
-    def to_celery_payload(self, event_id: str) -> dict[str, Any]:
-        return {
-            "eventId": event_id,
-            "assetId": self.assetId,
-            "workspaceId": self.workspaceId,
-            "ownerId": self.ownerId,
-            "bucket": self.storageBucket,
-            "objectKey": self.objectKey,
-            "contentType": self.contentType,
-            "originalFilename": self.originalFilename,
-            "sizeBytes": self.sizeBytes,
-        }
-
 
 class AssetProcessingRequestedEvent(BaseModel):
     eventId: str = Field(min_length=1)
@@ -71,9 +58,6 @@ class AssetProcessingRequestedEvent(BaseModel):
         if self.eventVersion != EXPECTED_EVENT_VERSION:
             raise ValueError(f"unsupported eventVersion '{self.eventVersion}'")
         return self
-
-    def to_celery_payload(self) -> dict[str, Any]:
-        return self.payload.to_celery_payload(self.eventId)
 
     def to_processing_command(self) -> ProcessingRequestCommand:
         return ProcessingRequestCommand(

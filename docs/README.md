@@ -61,11 +61,21 @@ Ollama is intended to run natively on the user's macOS host with `qwen3:1.7b` in
 
 ## Validation policy
 
-This repository intentionally does not maintain automated tests or a separate test image/runtime because its heavy media and ML dependency stack makes that impractical for this personal project. Validation uses runtime smoke checks, logs, database inspection, and manual integration checks. This is a repository-specific trade-off, not a general recommendation for backend services.
+The repository maintains deterministic unit, contract, architecture, and import-smoke tests
+that replace Kafka, Celery execution, MinIO, Ollama, and PostgreSQL with in-process fakes or
+SQLite where appropriate. The canonical full command is:
+
+```bash
+PYTHONPATH=backend python -m unittest discover -s backend -p 'test_*.py'
+```
+
+Runtime integration remains a separate bounded validation phase because the Python suite does
+not start Docker or contact real infrastructure.
 
 ## Current docs
 
 - [api_reference.md](./api_reference.md)
 - [architecture.md](./architecture.md)
+- [architecture/processing_pipeline.md](./architecture/processing_pipeline.md)
 - [deployment_guide.md](./deployment_guide.md)
 - [transcript_chunking.md](./transcript_chunking.md)

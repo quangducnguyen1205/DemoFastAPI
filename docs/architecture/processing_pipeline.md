@@ -88,15 +88,46 @@ the recovery-cycle limit and conditionally requeues them into the existing pendi
 Permanent, unknown, historical-unclassified, and `recovery_exhausted` rows remain terminal.
 This behavior remains separate from Celery retry behavior.
 
-The stable `app.services.processing_outbox*` module paths remain as thin compatibility
-imports for existing tests and relay commands; they contain no independent event serializer,
-publisher, state machine, or query implementation. Automatic and one-shot relay entrypoints
-still keep their existing module/Compose commands.
+The temporary `app.services.processing_outbox*` forwarding modules were removed after the
+manual/automatic relay entrypoints and tests migrated to the feature-owned services. No
+Compose, CLI, Celery discovery, application import, or test fixture referenced those service
+paths. Automatic and one-shot relay entrypoints keep their existing module/Compose commands.
 
 Crash-age recovery for rows abandoned in `publishing` was not added because the pre-refactor
 runtime had no safe age threshold or frozen configuration for it. It remains explicit debt
 rather than changing recovery behavior during this refactor.
 
-The old public module paths needed by Docker, Compose, Celery discovery, and HTTP routing are
-retained as thin entrypoints. Runtime composition is documented as its feature boundary lands
-in the final P3-S5.B3 commit.
+## Runtime composition and retained entrypoints
+
+`app.bootstrap` now makes composition explicit without a dependency-injection framework:
+
+- `api` creates the FastAPI application, includes processing/compatibility/assistant routers,
+  and preserves the existing bounded startup schema retry;
+- `consumer` composes request persistence and Celery dispatch, then starts the existing Kafka
+  consumer loop;
+- `worker` composes media acquisition, Whisper transcription, artifact persistence, canonical
+  result recording, and the direct-upload compatibility execution service;
+- `relay` composes the shared publisher, relay policy, outbox repository, and reconciler;
+- `assistant` exposes the unchanged assistant router without coupling it to processing.
+
+The stable external import/command paths remain `app.main:app`,
+`app.core.celery_app`, `python -m app.consumers.asset_processing_consumer`,
+`python -m app.relays.processing_outbox_relay`, and
+`python -m app.relays.processing_outbox_auto_relay`. They are thin adapters only. Settings
+remain in the existing flat `Settings` object because splitting it would add forwarding
+configuration without changing ownership; every environment-variable name and default is
+unchanged.
+
+The obsolete `processing.composition`, `services.processing_requests`, result-outbox service
+wrappers, task-owned processing algorithm, and SQLAlchemy transcript helper were removed only
+after repository-wide import-string and command searches showed no remaining callers.
+
+## Remaining FastAPI debt
+
+- There is no crash-age policy for abandoned `publishing` rows.
+- SQLAlchemy metadata plus the existing narrow schema upgrader remain in place instead of
+  Alembic migrations.
+- Kafka rejection still commits malformed/unsupported events without a DLQ.
+- Internal HTTP endpoints still require deployment-level service authentication/network
+  policy hardening.
+- Direct upload and one-shot relay remain deliberate rollback compatibility paths.

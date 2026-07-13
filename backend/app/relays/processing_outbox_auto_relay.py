@@ -4,12 +4,14 @@ import time
 from threading import Event
 
 from app import models as _models  # noqa: F401
+from app.bootstrap.relay import (
+    build_result_publisher,
+    build_result_reconciliation_service,
+    build_result_relay_service,
+)
 from app.config.settings import settings
 from app.core.database import SessionLocal
 from app.core.schema import initialize_database_schema
-from app.services.processing_outbox_publisher import build_processing_outbox_publisher
-from app.services.processing_outbox_relay import run_processing_outbox_relay_once
-from app.services.processing_outbox_recovery import reconcile_failed_processing_outbox_events
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +41,16 @@ def _run_iteration(db, publisher, *, run_recovery: bool):
     recovery_result = None
     if run_recovery:
         try:
-            recovery_result = reconcile_failed_processing_outbox_events(db)
+            recovery_result = build_result_reconciliation_service(db).reconcile_once(
+                enabled=settings.PROCESSING_OUTBOX_RECOVERY_ENABLED
+            )
         except Exception as exc:
             db.rollback()
             logger.warning(
                 "processing outbox recovery iteration failed category=%s",
                 type(exc).__name__,
             )
-    relay_result = run_processing_outbox_relay_once(
-        db,
-        publisher=publisher,
+    relay_result = build_result_relay_service(db, publisher).relay_once(
         enabled=settings.PROCESSING_OUTBOX_AUTO_RELAY_ENABLED,
         batch_size=settings.PROCESSING_OUTBOX_AUTO_RELAY_BATCH_SIZE,
     )
@@ -70,7 +72,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, _request_shutdown)
     signal.signal(signal.SIGTERM, _request_shutdown)
 
-    publisher = build_processing_outbox_publisher()
+    publisher = build_result_publisher()
     try:
         logger.info(
             "processing outbox auto relay started interval_seconds=%s batch_size=%s recovery_enabled=%s recovery_interval_seconds=%s",

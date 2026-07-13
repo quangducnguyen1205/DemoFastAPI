@@ -3,10 +3,6 @@ import subprocess
 import logging
 import threading
 from typing import List
-
-from sqlalchemy.orm import Session
-
-from app import models
 from app.utils import DEFAULT_TRANSCRIPT_CHUNK_CHARS, split_transcript_text
 
 logger = logging.getLogger(__name__)
@@ -48,9 +44,3 @@ def transcribe_audio_with_whisper(audio_path: str) -> str | None:
 
 def segment_text(full_text: str, max_len: int = DEFAULT_TRANSCRIPT_CHUNK_CHARS) -> List[str]:
     return split_transcript_text(full_text, max_len=max_len)
-
-
-def persist_transcript_segments(db: Session, video_id: int, segments: List[str]) -> None:
-    for idx, seg in enumerate(segments):
-        db.add(models.Transcript(video_id=video_id, segment_index=idx, text=seg))
-    db.commit()

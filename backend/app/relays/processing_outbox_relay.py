@@ -3,11 +3,10 @@ import logging
 import sys
 
 from app import models as _models  # noqa: F401
+from app.bootstrap.relay import build_result_publisher, build_result_relay_service
 from app.config.settings import settings
 from app.core.database import SessionLocal
 from app.core.schema import initialize_database_schema
-from app.services.processing_outbox_publisher import build_processing_outbox_publisher
-from app.services.processing_outbox_relay import run_processing_outbox_relay_once
 
 
 def main() -> int:
@@ -17,10 +16,12 @@ def main() -> int:
     )
     initialize_database_schema()
 
-    publisher = build_processing_outbox_publisher()
+    publisher = build_result_publisher()
     db = SessionLocal()
     try:
-        result = run_processing_outbox_relay_once(db, publisher=publisher)
+        result = build_result_relay_service(db, publisher).relay_once(
+            enabled=settings.PROCESSING_OUTBOX_RELAY_ENABLED
+        )
         print(json.dumps(result.to_dict(), sort_keys=True))
         if result.disabled or result.retried or result.failed:
             return 1

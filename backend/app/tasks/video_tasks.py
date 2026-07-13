@@ -2,12 +2,12 @@ import logging
 import time
 
 from app.core.celery_app import celery_app
-from app.processing.composition import (
+from app.processing.adapters.celery_dispatcher import decode_processing_task_payload
+from app.bootstrap.worker import (
     build_direct_upload_execution_service,
     build_processing_execution_service,
 )
 from app.processing.domain.models import (
-    ProcessingExecutionCommand,
     ProcessingFailed,
     ProcessingSkipped,
     ProcessingSucceeded,
@@ -41,7 +41,7 @@ def process_video_task(self, video_id: int, abs_video_path: str) -> dict:
 def process_asset_object_task(self, request: dict) -> dict:
     task_started_at = time.perf_counter()
     task_id = getattr(self.request, "id", None)
-    command = ProcessingExecutionCommand.from_task_payload(request)
+    command = decode_processing_task_payload(request)
     logger.info(
         "starting asset object processing event_id=%s asset_id=%s bucket=%s object_key=%s content_type=%s task_id=%s",
         command.event_id,

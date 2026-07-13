@@ -1,6 +1,5 @@
 import json
 import logging
-import signal
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -10,10 +9,9 @@ from sqlalchemy.orm import Session
 from app import models as _models  # noqa: F401
 from app.config.settings import settings
 from app.core.database import SessionLocal
-from app.core.schema import initialize_database_schema
 from app.events.asset_processing import EventValidationError, parse_asset_processing_requested_event
 from app.processing.application.dispatch import ProcessingAcceptance
-from app.processing.composition import build_processing_dispatch_service
+from app.bootstrap.consumer import build_processing_dispatch_service
 
 logger = logging.getLogger(__name__)
 
@@ -136,15 +134,9 @@ class AssetProcessingKafkaConsumer:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=settings.LOG_LEVEL,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    initialize_database_schema()
-    runner = AssetProcessingKafkaConsumer()
-    signal.signal(signal.SIGTERM, runner.stop)
-    signal.signal(signal.SIGINT, runner.stop)
-    runner.run_forever()
+    from app.bootstrap.consumer import run_processing_consumer
+
+    run_processing_consumer()
 
 
 if __name__ == "__main__":

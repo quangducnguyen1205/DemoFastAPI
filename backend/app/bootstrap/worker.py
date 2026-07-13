@@ -1,33 +1,17 @@
-from sqlalchemy.orm import Session
-
 from app.core.database import SessionLocal
-from app.processing.adapters.celery_dispatcher import CeleryProcessingTaskDispatcher
 from app.processing.adapters.media_source import ObjectStorageProcessingMediaSource
 from app.processing.adapters.sqlalchemy_stores import (
     SqlAlchemyDirectUploadArtifactStore,
     SqlAlchemyProcessingArtifactStore,
-    SqlAlchemyProcessingRequestRepository,
 )
 from app.processing.adapters.whisper_transcriber import WhisperProcessingTranscriptionProvider
-from app.processing.application.dispatch import DispatchProcessingApplicationService
 from app.processing.application.execute import (
     ExecuteDirectUploadProcessingApplicationService,
     ExecuteProcessingApplicationService,
 )
-from app.services.object_storage import get_object_storage_client
 from app.result_delivery.adapters.sqlalchemy_repository import SqlAlchemyProcessingResultOutboxRepository
 from app.result_delivery.application.record_result import RecordProcessingResultApplicationService
-
-
-def build_processing_dispatch_service(
-    db: Session,
-    *,
-    dispatcher=None,
-) -> DispatchProcessingApplicationService:
-    return DispatchProcessingApplicationService(
-        repository=SqlAlchemyProcessingRequestRepository(db),
-        dispatcher=dispatcher or CeleryProcessingTaskDispatcher(),
-    )
+from app.services.object_storage import get_object_storage_client
 
 
 def build_processing_execution_service() -> ExecuteProcessingApplicationService:

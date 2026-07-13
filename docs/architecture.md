@@ -12,20 +12,20 @@ Repo A is the internal processing service.
 
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
-| FastAPI API | `backend/app/main.py` | Exposes the processing endpoints and health/docs surface. |
+| FastAPI API | `backend/app/main.py`, `backend/app/bootstrap/api.py` | Stable ASGI import plus explicit API/router/startup composition. |
 | Videos router | `backend/app/routers/videos.py` | Upload, task polling, single-video status lookup, and transcript retrieval. |
 | Internal processing router | `backend/app/routers/internal_processing.py` | Read-only retrieval of Kafka-originated transcript artifact rows for trusted Spring service calls. |
 | Internal assistant router | `backend/app/routers/internal_assistant.py` | Trusted Spring-only grounded answer endpoint that accepts Spring-approved context and returns a normalized answer contract. |
 | Ollama assistant adapter | `backend/app/services/assistant_ollama.py` | Disabled-by-default non-streaming Ollama `/api/generate` caller for the assistant endpoint. |
-| Kafka consumer | `backend/app/consumers/asset_processing_consumer.py` | Consumes `asset.processing.requested.v1`, validates envelopes, applies idempotency, and hands accepted work to Celery. |
+| Kafka consumer | `backend/app/consumers/asset_processing_consumer.py`, `backend/app/bootstrap/consumer.py` | Transport loop plus explicit request-repository/Celery-dispatch composition. |
 | Celery app | `backend/app/core/celery_app.py` | Queue orchestration for background processing. |
-| Worker task | `backend/app/tasks/video_tasks.py` | Extract audio, transcribe, chunk transcript text, persist direct-upload transcripts, update processing state, and persist result outbox intent for Kafka-originated work. |
+| Worker task and composition | `backend/app/tasks/video_tasks.py`, `backend/app/bootstrap/worker.py` | Thin Celery adapters plus explicit processing execution dependencies. |
 | Object storage | `backend/app/services/object_storage.py` | S3-compatible MinIO access used by workers to download Spring-owned media objects. |
 | Result recording | `backend/app/result_delivery/application/record_result.py` | Maps one neutral processing outcome to one durable result intent in the worker transaction. |
 | Result event codec and publisher | `backend/app/result_delivery/adapters/event_codec.py`, `backend/app/result_delivery/adapters/kafka_publisher.py` | Own the frozen result envelope and opt-in Kafka delivery configuration. |
 | Result outbox | `backend/app/result_delivery/adapters/sqlalchemy_repository.py` | Owns durable append, claim/finalize/failure, and bounded recovery persistence operations. |
-| Result relay and reconciliation | `backend/app/result_delivery/application/relay.py`, `backend/app/result_delivery/application/reconcile.py`, `backend/app/relays/processing_outbox_relay.py`, `backend/app/relays/processing_outbox_auto_relay.py` | Manual one-shot relay plus opt-in automatic relay/reconciliation process. Both reuse the same delivery service and state machine. |
-| Processing helpers | `backend/app/services/video_processing.py` | ffmpeg extraction, Whisper access, transcript chunking, and transcript persistence. |
+| Result relay and reconciliation | `backend/app/result_delivery/application/relay.py`, `backend/app/result_delivery/application/reconcile.py`, `backend/app/bootstrap/relay.py`, `backend/app/relays/processing_outbox_relay.py`, `backend/app/relays/processing_outbox_auto_relay.py` | Shared delivery/recovery services plus stable manual and automatic adapters. |
+| Processing provider adapters | `backend/app/processing/adapters/media_source.py`, `backend/app/processing/adapters/whisper_transcriber.py` | Object acquisition, ffmpeg/Whisper invocation, and transcript chunk mapping. |
 | Persistence | `backend/app/models/video.py`, `backend/app/models/transcript.py`, `backend/app/models/processing_request.py` | Durable direct-upload processing state, transcript rows, Kafka idempotency records, Kafka-originated transcript artifacts, and pending result outbox rows. |
 
 ## Compose topology

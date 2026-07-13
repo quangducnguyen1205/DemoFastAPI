@@ -9,23 +9,21 @@ from app import models
 from app.core.database import Base
 from app.core.schema import ensure_processing_outbox_recovery_schema
 from app.relays import processing_outbox_auto_relay
-from app.services.processing_outbox_failure import (
+from app.result_delivery.domain.failure_classification import (
     PublicationFailureClassification,
     PublicationFailureDisposition,
     classify_publication_failure,
 )
-from app.services.processing_outbox_publisher import (
-    PermanentProcessingOutboxPublisherError,
+from app.result_delivery.domain.failures import (
+    PermanentProcessingResultPublisherError,
+    TransientProcessingResultPublisherError,
 )
-from app.result_delivery.domain.failures import TransientProcessingResultPublisherError
-from app.services.processing_outbox_recovery import (
-    _requeue_failed_event,
-    is_recovery_eligible,
-    reconcile_failed_processing_outbox_events,
-)
-from app.services.processing_outbox_relay import (
-    _mark_publish_failed,
-    run_processing_outbox_relay_once,
+from app.result_delivery.domain.outbox_state import ProcessingOutboxState, is_recovery_eligible
+from app.result_delivery.adapters.sqlalchemy_repository import SqlAlchemyProcessingResultOutboxRepository
+from app.result_delivery.application.reconcile import ReconcileFailedProcessingResultsApplicationService
+from app.result_delivery.application.relay import (
+    ProcessingResultRelayPolicy,
+    RelayProcessingResultsApplicationService,
 )
 
 
@@ -76,7 +74,7 @@ class PublicationFailureClassifierTest(unittest.TestCase):
 
     def test_invalid_event_is_permanent_and_unknown_fails_closed(self) -> None:
         self.assertEqual(
-            classify_publication_failure(PermanentProcessingOutboxPublisherError("invalid")).disposition,
+            classify_publication_failure(PermanentProcessingResultPublisherError("invalid")).disposition,
             PublicationFailureDisposition.PERMANENT,
         )
         self.assertEqual(
@@ -114,9 +112,14 @@ class ProcessingOutboxRecoveryTest(unittest.TestCase):
         permanent.failure_disposition = PublicationFailureDisposition.PERMANENT.value
         permanent.attempt_count = 5
 
-        self.assertFalse(is_recovery_eligible(historical, now=now, max_cycles=3))
-        self.assertFalse(is_recovery_eligible(transient_future, now=now, max_cycles=3))
-        self.assertFalse(is_recovery_eligible(permanent, now=now, max_cycles=3))
+        for event in (historical, transient_future, permanent):
+            state = ProcessingOutboxState(
+                event.status,
+                event.failure_disposition,
+                event.next_recovery_at,
+                event.recovery_cycle_count or 0,
+            )
+            self.assertFalse(is_recovery_eligible(state, now=now, max_cycles=3))
 
     def test_transient_row_requeues_once_after_cooldown_and_preserves_identity(self) -> None:
         db = self.Session()
@@ -131,14 +134,21 @@ class ProcessingOutboxRecoveryTest(unittest.TestCase):
         db.add(event)
         db.commit()
 
-        first = reconcile_failed_processing_outbox_events(
-            db,
+        first = ReconcileFailedProcessingResultsApplicationService(
+            repository=SqlAlchemyProcessingResultOutboxRepository(db),
+            batch_size=50,
+            max_cycles=3,
+        ).reconcile_once(
             enabled=True,
             batch_size=50,
             max_cycles=3,
             now=now,
         )
-        second_claim = _requeue_failed_event(db, event.id, now, 3)
+        second_claim = SqlAlchemyProcessingResultOutboxRepository(db).requeue_failed(
+            event.id,
+            now=now,
+            max_cycles=3,
+        )
         saved = db.query(models.ProcessingOutboxEvent).filter_by(id=event.id).one()
 
         self.assertEqual(first.requeued, 1)
@@ -153,7 +163,11 @@ class ProcessingOutboxRecoveryTest(unittest.TestCase):
 
     def test_recovery_disabled_does_not_query_or_requeue(self) -> None:
         db = MagicMock()
-        result = reconcile_failed_processing_outbox_events(db, enabled=False)
+        result = ReconcileFailedProcessingResultsApplicationService(
+            repository=SqlAlchemyProcessingResultOutboxRepository(db),
+            batch_size=50,
+            max_cycles=3,
+        ).reconcile_once(enabled=False)
         self.assertTrue(result.disabled)
         db.query.assert_not_called()
 
@@ -170,12 +184,17 @@ class ProcessingOutboxRecoveryTest(unittest.TestCase):
             "kafka_retryable_failure",
         )
 
-        with (
-            patch("app.services.processing_outbox_relay.settings.PROCESSING_OUTBOX_RELAY_MAX_ATTEMPTS", 5),
-            patch("app.services.processing_outbox_relay.settings.PROCESSING_OUTBOX_RECOVERY_MAX_CYCLES", 3),
-            patch("app.services.processing_outbox_relay.settings.PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS", 60),
-        ):
-            self.assertFalse(_mark_publish_failed(db, event, classification, now_utc()))
+        self.assertFalse(
+            SqlAlchemyProcessingResultOutboxRepository(db).record_publication_failure(
+                event.id,
+                classification=classification,
+                now=now_utc(),
+                max_attempts=5,
+                retry_delay_seconds=60,
+                recovery_max_cycles=3,
+                recovery_cooldown_seconds=60,
+            )
+        )
 
         saved = db.query(models.ProcessingOutboxEvent).filter_by(id=event.id).one()
         self.assertEqual(saved.failure_disposition, PublicationFailureDisposition.RECOVERY_EXHAUSTED.value)
@@ -197,7 +216,11 @@ class ProcessingOutboxRecoveryTest(unittest.TestCase):
         db.commit()
         publisher = Publisher()
 
-        result = run_processing_outbox_relay_once(db, publisher=publisher, enabled=True, batch_size=1)
+        result = RelayProcessingResultsApplicationService(
+            repository=SqlAlchemyProcessingResultOutboxRepository(db),
+            publisher=publisher,
+            policy=ProcessingResultRelayPolicy(10, 5, 60, 3, 60),
+        ).relay_once(enabled=True, batch_size=1)
 
         self.assertEqual(result.published, 1)
         self.assertEqual(publisher.ids, [event.id])
@@ -210,16 +233,20 @@ class AutomaticRelayRecoveryOwnershipTest(unittest.TestCase):
         order: list[str] = []
         recovery_result = MagicMock(eligible=1, requeued=1, skipped=0)
         relay_result = MagicMock()
+        recovery_service = MagicMock()
+        recovery_service.reconcile_once.side_effect = lambda **_kwargs: order.append("recovery") or recovery_result
+        relay_service = MagicMock()
+        relay_service.relay_once.side_effect = lambda **_kwargs: order.append("relay") or relay_result
         with (
             patch.object(
                 processing_outbox_auto_relay,
-                "reconcile_failed_processing_outbox_events",
-                side_effect=lambda _db: order.append("recovery") or recovery_result,
+                "build_result_reconciliation_service",
+                return_value=recovery_service,
             ),
             patch.object(
                 processing_outbox_auto_relay,
-                "run_processing_outbox_relay_once",
-                side_effect=lambda *_args, **_kwargs: order.append("relay") or relay_result,
+                "build_result_relay_service",
+                return_value=relay_service,
             ),
         ):
             actual_recovery, actual_relay = processing_outbox_auto_relay._run_iteration(
@@ -233,9 +260,15 @@ class AutomaticRelayRecoveryOwnershipTest(unittest.TestCase):
         self.assertIs(actual_relay, relay_result)
 
     def test_iteration_skips_reconciliation_when_disabled_for_that_interval(self) -> None:
+        relay_service = MagicMock()
+        relay_service.relay_once.return_value = MagicMock()
         with (
-            patch.object(processing_outbox_auto_relay, "reconcile_failed_processing_outbox_events") as recovery,
-            patch.object(processing_outbox_auto_relay, "run_processing_outbox_relay_once", return_value=MagicMock()),
+            patch.object(processing_outbox_auto_relay, "build_result_reconciliation_service") as recovery,
+            patch.object(
+                processing_outbox_auto_relay,
+                "build_result_relay_service",
+                return_value=relay_service,
+            ),
         ):
             processing_outbox_auto_relay._run_iteration(MagicMock(), MagicMock(), run_recovery=False)
         recovery.assert_not_called()
@@ -243,16 +276,20 @@ class AutomaticRelayRecoveryOwnershipTest(unittest.TestCase):
     def test_reconciliation_failure_is_safe_and_does_not_skip_normal_relay(self) -> None:
         db = MagicMock()
         relay_result = MagicMock()
+        recovery_service = MagicMock()
+        recovery_service.reconcile_once.side_effect = RuntimeError("private detail")
+        relay_service = MagicMock()
+        relay_service.relay_once.return_value = relay_result
         with (
             patch.object(
                 processing_outbox_auto_relay,
-                "reconcile_failed_processing_outbox_events",
-                side_effect=RuntimeError("private detail"),
+                "build_result_reconciliation_service",
+                return_value=recovery_service,
             ),
             patch.object(
                 processing_outbox_auto_relay,
-                "run_processing_outbox_relay_once",
-                return_value=relay_result,
+                "build_result_relay_service",
+                return_value=relay_service,
             ) as relay,
             self.assertLogs(processing_outbox_auto_relay.logger, level="WARNING") as captured,
         ):

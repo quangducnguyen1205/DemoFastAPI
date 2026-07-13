@@ -6,7 +6,10 @@ from unittest.mock import MagicMock, patch
 
 from app.consumers.asset_processing_consumer import handle_asset_processing_message
 from app.events.asset_processing import EventValidationError, parse_asset_processing_requested_event
-from app.processing.adapters.celery_dispatcher import CeleryProcessingTaskDispatcher
+from app.processing.adapters.celery_dispatcher import (
+    CeleryProcessingTaskDispatcher,
+    encode_processing_task_payload,
+)
 from app.processing.application.dispatch import DispatchProcessingApplicationService
 from app.processing.application.execute import ExecuteProcessingApplicationService
 from app.processing.domain.models import (
@@ -194,7 +197,7 @@ class CeleryWorkerAdapterTest(unittest.TestCase):
         service = MagicMock()
         service.execute.return_value = outcome
         with patch("app.tasks.video_tasks.build_processing_execution_service", return_value=service):
-            result = process_asset_object_task.run(command().to_task_payload())
+            result = process_asset_object_task.run(encode_processing_task_payload(command()))
         passed_command = service.execute.call_args.args[0]
         self.assertEqual(passed_command, command())
         self.assertEqual(result, {"status": "ready", "asset_id": "asset-1", "segments": ["first"]})

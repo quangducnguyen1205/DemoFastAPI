@@ -101,6 +101,12 @@ docker compose -f docker-compose.yml -f docker-compose.project3.yml config
 
 Focused Python unit tests cover assistant structured generation plus processing-event validation, idempotent enqueue behavior, terminal result outbox intent, relay safety gates, and configuration overrides. They mock infrastructure boundaries and do not call Kafka, Celery workers, MinIO, FastAPI HTTP, or Ollama.
 
+Run the canonical full Python suite without external services:
+
+```bash
+PYTHONPATH=backend python -m unittest discover -s backend -p 'test_*.py'
+```
+
 ## Direct processing deprecation
 
 `POST /videos/upload` is deprecated in FastAPI/OpenAPI metadata but remains fully functional. Each invocation emits one safe warning stating that the endpoint is retained for rollback compatibility and that the Project3 Kafka consumer is the replacement. The warning contains no file name, title, owner, task, account, credential, or payload data.

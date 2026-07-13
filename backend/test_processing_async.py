@@ -1,14 +1,12 @@
 import importlib
 import os
 import unittest
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import app.config.settings as settings_module
 from app.events.asset_processing import EventValidationError, parse_asset_processing_requested_event
 from app.relays import processing_outbox_auto_relay
-from app.services import processing_outbox_publisher, processing_requests
-from app.services.processing_outbox import add_transcript_ready_event
+from app.result_delivery.adapters import kafka_publisher as processing_outbox_publisher
 
 
 def valid_event_dict() -> dict:
@@ -47,83 +45,6 @@ class AssetProcessingEventValidationTest(unittest.TestCase):
             parse_asset_processing_requested_event(raw_event)
 
 
-class ProcessingRequestAcceptanceTest(unittest.TestCase):
-    def test_completed_duplicate_does_not_enqueue_another_celery_task(self) -> None:
-        event = parse_asset_processing_requested_event(valid_event_dict())
-        existing = SimpleNamespace(
-            event_id=event.eventId,
-            asset_id=event.payload.assetId,
-            status="ready",
-            celery_task_id="asset-processing-existing",
-        )
-        enqueue = MagicMock()
-        with patch.object(processing_requests, "_get_or_create_processing_request", return_value=existing):
-            result = processing_requests.accept_processing_event(MagicMock(), event, enqueue=enqueue)
-        self.assertTrue(result.accepted)
-        self.assertTrue(result.duplicate)
-        self.assertEqual(result.celery_task_id, "asset-processing-existing")
-        enqueue.assert_not_called()
-
-    def test_new_request_enqueues_once_with_a_deterministic_task_id(self) -> None:
-        event = parse_asset_processing_requested_event(valid_event_dict())
-        accepted = SimpleNamespace(
-            event_id=event.eventId,
-            asset_id=event.payload.assetId,
-            status="accepted",
-            celery_task_id=None,
-        )
-        enqueued = SimpleNamespace(
-            event_id=event.eventId,
-            asset_id=event.payload.assetId,
-            status="enqueued",
-            celery_task_id=f"asset-processing-{event.eventId}",
-            storage_bucket=event.payload.storageBucket,
-            object_key=event.payload.objectKey,
-        )
-        query = MagicMock()
-        query.filter.return_value = query
-        query.update.return_value = 1
-        query.one.return_value = enqueued
-        db = MagicMock()
-        db.query.return_value = query
-        enqueue = MagicMock(return_value=SimpleNamespace(id=enqueued.celery_task_id))
-
-        with patch.object(processing_requests, "_get_or_create_processing_request", return_value=accepted):
-            result = processing_requests.accept_processing_event(db, event, enqueue=enqueue)
-
-        enqueue.assert_called_once_with(
-            args=[event.to_celery_payload()],
-            task_id=f"asset-processing-{event.eventId}",
-        )
-        db.commit.assert_called_once()
-        self.assertFalse(result.duplicate)
-        self.assertEqual(result.status, "enqueued")
-
-
-class ProcessingResultOutboxTest(unittest.TestCase):
-    def test_terminal_ready_result_creates_one_outbox_intent(self) -> None:
-        query = MagicMock()
-        query.filter.return_value = query
-        query.first.return_value = None
-        db = MagicMock()
-        db.query.return_value = query
-        request = SimpleNamespace(
-            event_id="evt-00000000-0000-4000-8000-000000000001",
-            asset_id="asset-00000000-0000-4000-8000-000000000001",
-        )
-
-        event = add_transcript_ready_event(db, processing_request=request, segment_count=3)
-
-        db.add.assert_called_once()
-        persisted = db.add.call_args.args[0]
-        self.assertEqual(persisted.id, event.id)
-        self.assertEqual(persisted.payload, event.payload)
-        self.assertEqual(event.event_type, "transcript.ready")
-        self.assertEqual(event.causation_event_id, request.event_id)
-        self.assertEqual(event.payload["status"], "ready")
-        self.assertEqual(event.payload["segmentCount"], 3)
-
-
 class AutomaticRelayConfigurationTest(unittest.TestCase):
     def test_auto_relay_requires_both_enablement_and_publisher_gates(self) -> None:
         combinations = ((False, False, False), (True, False, False), (False, True, False), (True, True, True))
@@ -145,12 +66,12 @@ class AutomaticRelayConfigurationTest(unittest.TestCase):
 
     def test_publisher_factory_fails_closed_unless_explicitly_enabled(self) -> None:
         with patch.object(processing_outbox_publisher.settings, "PROCESSING_RESULT_PUBLISHER_ENABLED", False):
-            publisher = processing_outbox_publisher.build_processing_outbox_publisher()
-            self.assertIsInstance(publisher, processing_outbox_publisher.DisabledProcessingOutboxPublisher)
+            publisher = processing_outbox_publisher.build_processing_result_publisher()
+            self.assertIsInstance(publisher, processing_outbox_publisher.DisabledProcessingResultPublisher)
 
         with patch.object(processing_outbox_publisher.settings, "PROCESSING_RESULT_PUBLISHER_ENABLED", True):
-            publisher = processing_outbox_publisher.build_processing_outbox_publisher()
-            self.assertIsInstance(publisher, processing_outbox_publisher.KafkaProcessingOutboxPublisher)
+            publisher = processing_outbox_publisher.build_processing_result_publisher()
+            self.assertIsInstance(publisher, processing_outbox_publisher.KafkaProcessingResultPublisher)
 
 
 class ProcessingSettingsTest(unittest.TestCase):

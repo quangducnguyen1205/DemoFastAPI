@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 
 @dataclass(frozen=True)
@@ -46,34 +46,6 @@ class ProcessingExecutionCommand:
     original_filename: str | None
     content_type: str
     size_bytes: int
-
-    def to_task_payload(self) -> dict[str, Any]:
-        return {
-            "eventId": self.event_id,
-            "assetId": self.asset_id,
-            "workspaceId": self.workspace_id,
-            "ownerId": self.owner_id,
-            "bucket": self.storage_bucket,
-            "objectKey": self.object_key,
-            "contentType": self.content_type,
-            "originalFilename": self.original_filename,
-            "sizeBytes": self.size_bytes,
-        }
-
-    @classmethod
-    def from_task_payload(cls, payload: dict[str, Any]) -> "ProcessingExecutionCommand":
-        return cls(
-            event_id=payload["eventId"],
-            asset_id=payload["assetId"],
-            workspace_id=payload.get("workspaceId"),
-            owner_id=payload.get("ownerId"),
-            storage_bucket=payload["bucket"],
-            object_key=payload["objectKey"],
-            original_filename=payload.get("originalFilename"),
-            content_type=payload["contentType"],
-            size_bytes=payload["sizeBytes"],
-        )
-
 
 @dataclass(frozen=True)
 class ProcessingTranscriptRow:
