@@ -1,6 +1,10 @@
 # Documentation Index
 
-This branch documents Repo A as an internal processing dependency for the integrated product.
+This repository documents FastAPI as the internal processing/provider dependency for the
+Project3 integrated product.
+
+Cross-repository v1 ownership and validation are summarized in the
+[Project3 final baseline](https://github.com/quangducnguyen1205/ai-knowledge-workspace/blob/project3-submission-v1/docs/submission/project3-final-baseline.md).
 
 | Doc | Summary |
 |-----|---------|

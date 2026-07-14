@@ -1,12 +1,16 @@
 # AI Knowledge Workspace Processing Service
 
-Repo A on this branch is an internal processing service for the integrated product.
+This repository is the internal processing service for the Project3 integrated product. The
+cross-repository v1 ownership and validation manifest is maintained in the
+[Spring product-core final baseline](https://github.com/quangducnguyen1205/ai-knowledge-workspace/blob/project3-submission-v1/docs/submission/project3-final-baseline.md).
 
-- Repo B: product-facing backend and system of record
-- Repo FE: product UI
-- Repo A: internal Kafka consumer, upload compatibility path, process, poll status, fetch transcript
+- Spring product core: product-facing backend and system of record
+- Frontend repository: product UI
+- FastAPI: internal Kafka consumer, retained upload compatibility path, processing, task polling,
+  and transcript retrieval
 
-This branch intentionally removes product/demo/search responsibilities from Repo A.
+This service intentionally keeps product/demo/search responsibilities in Spring and the
+frontend repositories.
 
 ## Active responsibility
 
