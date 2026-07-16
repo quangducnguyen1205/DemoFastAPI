@@ -93,7 +93,7 @@ The consumer commits valid offsets only after successful Celery handoff. Invalid
 Base `docker-compose.yml` remains usable by itself for standalone/direct-upload development. For the coherent Project3 async path, ensure the existing image is available and use:
 
 ```bash
-make project3-up
+make up
 ```
 
 New Project3 integrations must use this Kafka consumer topology. The direct endpoint remains available for rollback and generic standalone use during its deprecation period; no removal date is assigned.
@@ -102,7 +102,7 @@ Migration from the old normal local flow is:
 
 ```text
 old: compatibility/direct upload -> TRANSCRIPT_READY -> explicit Index transcript
-new: make project3-up + Spring make run -> upload -> automatic processing -> automatic indexing -> SEARCHABLE
+new: make up + Spring make run -> upload -> automatic processing -> automatic indexing -> SEARCHABLE
 ```
 
 Explicit indexing recovery, one-shot/manual relays, and exact-ID recovery remain supported and are not deprecated.
@@ -161,7 +161,7 @@ docker compose --profile manual run --rm result-relay
 The normal Project3 target starts the automatic relay with both safety gates enabled:
 
 ```bash
-make project3-up
+make up
 ```
 
 The automatic relay remains a dedicated long-running process, not behavior inside `backend`, `consumer`, or `worker`. The Project3 overlay coherently sets `PROCESSING_OUTBOX_AUTO_RELAY_ENABLED=true`, `PROCESSING_RESULT_PUBLISHER_ENABLED=true`, and `PROCESSING_OUTBOX_RECOVERY_ENABLED=true`; the process still validates the publication gates at startup. Base Compose preserves disabled reconciliation and the one-shot/manual behavior.

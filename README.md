@@ -88,10 +88,10 @@ docker compose up --build backend worker consumer db redis
 For the coherent Project3 runtime with Spring-owned Kafka and MinIO, start Spring infrastructure first, ensure the existing FastAPI image is available, then run:
 
 ```bash
-make project3-up
+make up
 ```
 
-`make project3-up` uses both Compose files and explicitly includes `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay` without building or pulling. The relay receives both required safety gates. Base Compose and `make up` remain standalone-compatible; the one-shot relay and direct-upload endpoints are not removed.
+`make up` uses both Compose files and explicitly includes `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay` without building or pulling. The relay receives both required safety gates. Base Compose and `make standalone-up` remain standalone-compatible; the one-shot relay and direct-upload endpoints are not removed.
 
 The controlled local observation campaign supports documented deprecation of the Spring direct-processing compatibility path, but it does not claim production-scale stability. New Project3 integrations must use the Kafka consumer path.
 
