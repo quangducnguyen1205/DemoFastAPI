@@ -31,6 +31,10 @@ class WhisperTimestampNormalizationTest(unittest.TestCase):
         self.assertEqual(seconds_to_milliseconds(1.2344), 1234)
         self.assertEqual(seconds_to_milliseconds(1.2346), 1235)
 
+    def test_exact_half_milliseconds_use_python_round_half_to_even(self) -> None:
+        self.assertEqual(seconds_to_milliseconds(0.0005), 0)
+        self.assertEqual(seconds_to_milliseconds(0.0015), 2)
+
     def test_missing_timing_remains_absent(self) -> None:
         self.assertIsNone(seconds_to_milliseconds(None))
         rows = normalize_whisper_result({"segments": [{"text": "legacy"}]})
@@ -62,6 +66,7 @@ class WhisperTimestampNormalizationTest(unittest.TestCase):
                 "app.processing.adapters.whisper_transcriber.transcribe_audio_with_whisper",
                 return_value=result,
             ),
+            patch("app.processing.adapters.whisper_transcriber.segment_text") as fallback_chunker,
         ):
             rows = WhisperProcessingTranscriptionProvider().transcribe("/tmp/media.mp4")
 
@@ -72,6 +77,7 @@ class WhisperTimestampNormalizationTest(unittest.TestCase):
                 ProcessingTranscriptRow(1, "second", 1250, 2500),
             ),
         )
+        fallback_chunker.assert_not_called()
 
 
 class TranscriptArtifactCompatibilityTest(unittest.TestCase):

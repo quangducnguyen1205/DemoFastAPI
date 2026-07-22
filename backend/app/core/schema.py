@@ -125,8 +125,15 @@ def _apply_processing_transcript_timing_schema(
             BEGIN
                 IF NOT EXISTS (
                     SELECT 1
-                    FROM pg_constraint
-                    WHERE conname = 'ck_processing_request_transcript_timing'
+                    FROM pg_constraint constraint_record
+                    JOIN pg_class table_record
+                      ON table_record.oid = constraint_record.conrelid
+                    JOIN pg_namespace schema_record
+                      ON schema_record.oid = table_record.relnamespace
+                    WHERE constraint_record.conname = 'ck_processing_request_transcript_timing'
+                      AND constraint_record.contype = 'c'
+                      AND table_record.relname = 'processing_request_transcripts'
+                      AND schema_record.nspname = current_schema()
                 ) THEN
                     ALTER TABLE processing_request_transcripts
                     ADD CONSTRAINT ck_processing_request_transcript_timing CHECK (

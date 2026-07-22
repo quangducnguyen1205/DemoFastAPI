@@ -44,7 +44,11 @@ The overlay attaches only `backend`, `consumer`, `worker`, and the manual-profil
 
 ### Deprecated, functional direct-upload flow
 
-This flow is deprecated for normal Project3 integration. The route is marked deprecated in OpenAPI and emits a safe invocation warning, but its request, response, storage, database, and Celery behavior are unchanged. It remains supported temporarily for Spring rollback mode and generic standalone FastAPI use. The replacement for Project3 is the Kafka consumer path, and no removal date is assigned.
+This flow is deprecated for normal Project3 integration. The route is marked deprecated in
+OpenAPI and emits a safe invocation warning, but its request, response, storage, database, and
+Celery behavior are unchanged. It remains supported for generic standalone and legacy FastAPI
+callers; current Spring has no direct-upload caller. The replacement for Project3 is the Kafka
+consumer path, and no removal date is assigned.
 
 1. `POST /videos/upload` stores the file under `MEDIA_ROOT/videos/`.
 2. The API inserts a `videos` row and sets `status="processing"`.
@@ -55,9 +59,11 @@ This flow is deprecated for normal Project3 integration. The route is marked dep
    - chunks transcript text
    - persists transcript rows in PostgreSQL
    - updates `videos.status` to `ready` or `failed`
-5. Repo B polls `GET /videos/tasks/{task_id}` and can fetch `GET /videos/{video_id}` or `GET /videos/{video_id}/transcript`.
+5. Standalone and legacy callers poll `GET /videos/tasks/{task_id}` and can fetch
+   `GET /videos/{video_id}` or `GET /videos/{video_id}/transcript`.
 
-This path remains for compatibility while Project3 moves ingestion ownership into Spring Boot and MinIO.
+This path remains only for standalone and legacy FastAPI compatibility. Project3 ingestion
+ownership has moved to Spring Boot and MinIO.
 
 ### Kafka-originated asset flow
 

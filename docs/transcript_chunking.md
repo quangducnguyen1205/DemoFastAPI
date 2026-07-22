@@ -16,10 +16,15 @@ both present with `start_ms >= 0` and `end_ms >= start_ms`. Legacy rows remain r
 
 Whisper's structured segments are now the primary processing boundary. The Whisper adapter:
 
+- treats one structured Whisper segment as exactly one canonical transcript artifact row
 - reads provider `start`/`end` values expressed as finite seconds
-- converts each value once with `round(seconds * 1000)`
+- converts each value once with Python `round(seconds * 1000)`, including its explicit
+  round-half-to-even behavior at exact half milliseconds
 - rejects partial, negative, non-finite, or backwards timing
 - preserves provider segment order as `segment_index`
+
+Structured segments are not passed through the custom text chunker. Their provider granularity
+is the canonical transcript-row policy for the normal Kafka/Celery path.
 
 When the provider supplies no structured segments, the compatibility fallback remains
 deterministic and text-based:
@@ -37,7 +42,8 @@ Implementation lives in:
 
 ## Why this shape still exists
 
-Repo A is a processing service, not a full transcript understanding system. The current chunker exists to:
+Repo A is a processing service, not a full transcript understanding system. The fallback chunker
+exists only for provider results without structured segments, to:
 
 - keep transcript rows readable and deterministic
 - avoid blind character cuts in long fragments

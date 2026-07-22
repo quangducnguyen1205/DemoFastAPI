@@ -130,4 +130,5 @@ after repository-wide import-string and command searches showed no remaining cal
 - Kafka rejection still commits malformed/unsupported events without a DLQ.
 - Internal HTTP endpoints still require deployment-level service authentication/network
   policy hardening.
-- Direct upload and one-shot relay remain deliberate rollback compatibility paths.
+- Direct upload remains standalone/legacy compatibility; the one-shot relay remains a deliberate
+  recovery path. Current Spring has no direct-upload mode.

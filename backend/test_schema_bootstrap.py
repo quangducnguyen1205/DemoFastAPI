@@ -114,6 +114,24 @@ class PostgreSqlSchemaInitializationLockTest(unittest.TestCase):
         finally:
             bind.dispose()
 
+    def test_postgresql_timing_constraint_lookup_is_scoped_to_the_current_schema_table(self) -> None:
+        connection = MagicMock()
+
+        schema._apply_processing_transcript_timing_schema(
+            connection,
+            "postgresql",
+            {"start_ms", "end_ms"},
+        )
+
+        constraint_sql = next(
+            str(call_args.args[0])
+            for call_args in connection.execute.call_args_list
+            if "pg_constraint" in str(call_args.args[0])
+        )
+        self.assertIn("constraint_record.contype = 'c'", constraint_sql)
+        self.assertIn("table_record.relname = 'processing_request_transcripts'", constraint_sql)
+        self.assertIn("schema_record.nspname = current_schema()", constraint_sql)
+
 
 class SchemaInitializerEntrypointTest(unittest.TestCase):
     def test_api_consumer_worker_and_auto_relay_keep_delegating_to_the_canonical_initializer(self) -> None:

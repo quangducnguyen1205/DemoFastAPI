@@ -96,7 +96,9 @@ Base `docker-compose.yml` remains usable by itself for standalone/direct-upload 
 make up
 ```
 
-New Project3 integrations must use this Kafka consumer topology. The direct endpoint remains available for rollback and generic standalone use during its deprecation period; no removal date is assigned.
+New Project3 integrations must use this Kafka consumer topology. The direct endpoint remains
+available for generic standalone and legacy callers during its deprecation period, but current
+Spring does not call it; no removal date is assigned.
 
 Migration from the old normal local flow is:
 
@@ -179,9 +181,14 @@ When enabled, the automatic relay first reconciles a bounded batch of due `faile
 
 Stuck `publishing` recovery after process interruption and a full Kafka DLQ/parking topic remain future work. Publication is at-least-once rather than end-to-end exactly-once because the relay can publish and then crash before marking the row `published`; Spring consumers must be idempotent by result `eventId`.
 
-The automatic relay publishes only due FastAPI processing-result outbox rows through the existing supported contracts: `transcript.ready` and `asset.processing.failed`. It is not a generic event relay and does not place transcript text, media bytes, object storage credentials, tokens, stack traces, or product ownership data in result payloads. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the automatic relay with the Project3 overlay in the fully automatic Spring/FastAPI path: Spring automatic request relay, FastAPI consumer/Celery, FastAPI automatic result relay, and Spring automatic result listener completed one upload without manual request/result controls. Direct upload remained the default product mode and was not exercised; indexing/search stayed disabled.
+The automatic relay publishes only due FastAPI processing-result outbox rows through the existing supported contracts: `transcript.ready` and `asset.processing.failed`. It is not a generic event relay and does not place transcript text, media bytes, object storage credentials, tokens, stack traces, or product ownership data in result payloads. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the automatic relay with the Project3 overlay in the fully automatic Spring/FastAPI path: Spring automatic request relay, FastAPI consumer/Celery, FastAPI automatic result relay, and Spring automatic result listener completed one upload without manual request/result controls. Direct upload was not exercised; current Spring uses only the Kafka/outbox processing path. Indexing/search stayed disabled in that historical run.
 
-This repository does not use Alembic yet. Startup uses SQLAlchemy metadata for new databases and an idempotent narrow schema upgrader for processing-outbox recovery metadata on existing local databases. Pre-existing failed rows become `unknown`, retain event identity, and are never automatically reconciled. Do not edit rows directly; investigate recovery-exhausted failures and use retained operator controls only after the publisher dependency is healthy.
+This repository does not use Alembic yet. Startup uses SQLAlchemy metadata for new databases and
+idempotent narrow schema upgrades for processing-outbox recovery metadata and nullable transcript
+timing on existing local databases. Pre-existing failed rows become `unknown`, retain event
+identity, and are never automatically reconciled. Do not edit rows directly; investigate
+recovery-exhausted failures and use retained operator controls only after the publisher dependency
+is healthy.
 
 ## Runtime validation
 

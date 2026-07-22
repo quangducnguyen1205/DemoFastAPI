@@ -15,13 +15,15 @@ frontend repositories.
 ## Active responsibility
 
 - consume `asset.processing.requested.v1` from Kafka for Spring-owned assets
-- retain the deprecated direct-upload endpoint for Spring rollback compatibility and generic standalone use
+- retain the deprecated direct-upload endpoint for generic standalone and legacy callers; the current Spring product core does not call it
 - enqueue and run transcription processing
 - persist processing state, direct-upload transcript rows, and Kafka-originated processing transcript artifacts
 - persist and relay processing result events for Kafka-originated success/failure outcomes when explicitly enabled
 - expose Kafka-originated transcript artifacts to Spring through an internal read-only retrieval endpoint
 - expose one internal grounded assistant answer endpoint for Spring-approved context; generic defaults stay disabled while the integrated Project3 topology enables the validated local runtime
 - return transcript results through the existing processing-side contract
+- treat each structured Whisper segment as one canonical processing-artifact row; text chunking is
+  fallback-only when structured segments are absent
 
 ## Not part of this branch
 
@@ -93,7 +95,9 @@ make up
 
 `make up` uses both Compose files and explicitly includes `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay` without building or pulling. The relay receives both required safety gates. Base Compose and `make standalone-up` remain standalone-compatible; the one-shot relay and direct-upload endpoints are not removed.
 
-The controlled local observation campaign supports documented deprecation of the Spring direct-processing compatibility path, but it does not claim production-scale stability. New Project3 integrations must use the Kafka consumer path.
+The controlled local observation campaign supports deprecation of the direct-processing endpoint,
+but it does not claim production-scale stability. The current Spring product core has removed its
+direct-processing mode; new Project3 integrations must use the Kafka consumer path.
 
 Validate runtime wiring:
 
@@ -115,13 +119,18 @@ PYTHONPATH=backend python -m unittest discover -s backend -p 'test_*.py'
 
 `POST /videos/upload` is deprecated in FastAPI/OpenAPI metadata but remains fully functional. Each invocation emits one safe warning stating that the endpoint is retained for rollback compatibility and that the Project3 Kafka consumer is the replacement. The warning contains no file name, title, owner, task, account, credential, or payload data.
 
-No removal date is assigned. The endpoint continues to preserve the same path, multipart request, response fields, status behavior, file persistence, database writes, and Celery enqueue behavior. It remains available for the Spring `compatibility` profile and generic standalone FastAPI use outside Project3 integration. Removal requires a completed deprecation window, caller and standalone-use audits, replacement observation evidence, a rollback plan, and a separate removal decision.
+No removal date is assigned. The endpoint continues to preserve the same path, multipart request,
+response fields, status behavior, file persistence, database writes, and Celery enqueue behavior.
+It remains available for generic standalone and legacy FastAPI callers, but current Spring has no
+compatibility profile or direct-upload caller. Removal requires a completed deprecation window,
+caller and standalone-use audits, replacement observation evidence, a rollback plan, and a
+separate removal decision.
 
 Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legacy session authentication are outside this deprecation scope.
 
 ## Compatibility notes
 
-- Deprecated `POST /videos/upload` still returns `{task_id, status, video_id}` and remains callable by Spring rollback mode.
+- Deprecated `POST /videos/upload` still returns `{task_id, status, video_id}` for standalone and legacy callers; current Spring does not call it.
 - `GET /videos/tasks/{task_id}` still mirrors Celery task state.
 - `GET /videos/{video_id}/transcript` still returns ordered transcript rows by `segment_index`.
 - `GET /internal/processing-requests/{processingRequestId}/transcript-rows` returns Kafka-originated processing artifact rows ordered by `segment_index`, including nullable integer-millisecond `start_ms`/`end_ms`. Legacy artifacts return null timing. It returns `404` for unknown processing requests and `409` when a request is failed, not ready, or ready without usable transcript artifacts.
@@ -136,9 +145,9 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
 - Spring remains the owner of final product transcript snapshots after it retrieves and validates processing artifact rows.
 - Production-grade service-to-service authentication or network policy for internal endpoints is not implemented in this phase.
 - Generic mode keeps the internal Ollama adapter disabled. The Project3 overlay enables only the validated local provider values; runtime installation and model availability remain operator prerequisites.
-- P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the fully automatic path: Spring `kafka_request` plus automatic request relay, FastAPI consumer/Celery processing from MinIO, FastAPI automatic result relay, and Spring automatic result listener. Direct upload remained the default product mode and was not exercised; search/indexing stayed disabled.
-- Stuck `publishing` recovery, generic all-event relay, production deployment hardening, retry topics, and a full Kafka DLQ remain future work. Direct upload and manual relay remain executable rollback paths.
-- This repo still uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables and applies a narrow idempotent processing-outbox column/index upgrade for existing local databases; historical terminal failures are classified `unknown` instead of being replayed.
+- P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the fully automatic path: Spring `kafka_request` plus automatic request relay, FastAPI consumer/Celery processing from MinIO, FastAPI automatic result relay, and Spring automatic result listener. Direct upload was not exercised; current Spring uses only the Kafka/outbox processing path.
+- Stuck `publishing` recovery, generic all-event relay, production deployment hardening, retry topics, and a full Kafka DLQ remain future work. Direct upload remains standalone compatibility; manual relay remains an executable recovery path.
+- This repo still uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables and applies narrow idempotent upgrades for processing-outbox recovery and processing-artifact timing; historical terminal failures are classified `unknown` instead of being replayed.
 
 ## Documentation
 
