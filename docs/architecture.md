@@ -108,7 +108,13 @@ When Spring handles `transcript.ready`, it retrieves transcript content through:
 GET /internal/processing-requests/{processingRequestId}/transcript-rows
 ```
 
-The `processingRequestId` is the original Spring request event ID stored as `ProcessingRequest.event_id`. The endpoint returns the processing artifact rows in ascending `segment_index` order using Spring's existing transcript-row JSON shape: `id`, `video_id`, `segment_index`, `text`, and `created_at`. For Kafka-originated artifacts, `video_id` carries the processing request/event ID because there is no direct-upload `videos.id` row.
+The `processingRequestId` is the original Spring request event ID stored as
+`ProcessingRequest.event_id`. The endpoint returns processing artifact rows in ascending
+`segment_index` order using snake_case fields: `id`, `video_id`, `segment_index`, nullable
+`start_ms`, nullable `end_ms`, `text`, and `created_at`. The Whisper adapter is the sole
+seconds-to-integer-milliseconds normalization boundary. Legacy artifacts return null timing.
+For Kafka-originated artifacts, `video_id` carries the processing request/event ID because
+there is no direct-upload `videos.id` row.
 
 This endpoint is read-only. It does not change `ProcessingRequest`, transcript rows, Celery state, Kafka, or outbox rows. It returns `404` for unknown requests and `409` when a request is failed, not ready, or ready without usable artifact rows.
 
@@ -196,7 +202,7 @@ Repo A intentionally keeps only processing-oriented state:
 - `processing_request_transcripts`
   - transcript segment artifacts tied to `processing_requests.event_id`
   - segment index and text
-  - nullable timing fields for future pipeline output
+  - nullable integer-millisecond `start_ms`/`end_ms` normalized from provider seconds
 - `processing_outbox_events`
   - result-event relay state for Kafka-originated processing completion/failure
   - unique `(causation_event_id, event_type)` to prevent duplicate outbox intent from duplicate task execution
@@ -206,7 +212,10 @@ Repo A does not own product auth, user identity, asset metadata, search indexes,
 
 Kafka-originated transcript and outbox rows are processing artifacts. They support later completion/failure event publishing back to Spring but do not make FastAPI the product source of truth.
 
-This repo uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables and applies an idempotent narrow upgrade for the processing-result outbox recovery columns and index. Existing historical failed rows are marked `unknown` and are not automatically replayed.
+This repo uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables and applies
+idempotent narrow upgrades for processing-result outbox recovery and processing-artifact timing.
+Existing historical failed rows are marked `unknown` and are not automatically replayed; legacy
+transcript rows gain nullable millisecond columns without a fabricated backfill.
 
 ## Removed from active runtime
 

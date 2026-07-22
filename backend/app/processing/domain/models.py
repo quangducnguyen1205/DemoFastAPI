@@ -47,12 +47,13 @@ class ProcessingExecutionCommand:
     content_type: str
     size_bytes: int
 
+
 @dataclass(frozen=True)
 class ProcessingTranscriptRow:
     segment_index: int
     text: str
-    start_seconds: float | None = None
-    end_seconds: float | None = None
+    start_ms: int | None = None
+    end_ms: int | None = None
 
 
 @dataclass(frozen=True)

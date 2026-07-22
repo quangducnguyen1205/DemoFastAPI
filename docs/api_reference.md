@@ -131,13 +131,20 @@ Success response:
     "id": "1",
     "video_id": "9d0d6e36-d45f-41dc-8a73-33ebf0f31749",
     "segment_index": 0,
+    "start_ms": 0,
+    "end_ms": 1240,
     "text": "First processing artifact chunk.",
     "created_at": "2026-06-21T10:00:00Z"
   }
 ]
 ```
 
-Rows are ordered by `segment_index` and then internal row id. The response is an array with the JSON fields Spring's existing `FastApiTranscriptRowResponse` expects: `id`, `video_id`, `segment_index`, `text`, and `created_at`. For Kafka-originated artifact rows, `video_id` carries the processing request/event ID for compatibility with that DTO.
+Rows are ordered by `segment_index` and then internal row id. The response fields are `id`,
+`video_id`, `segment_index`, nullable `start_ms`, nullable `end_ms`, `text`, and `created_at`.
+Timing is normalized from Whisper seconds to integer milliseconds before persistence. Legacy
+artifacts omit timing at rest and are returned with both fields as `null`. For Kafka-originated
+artifact rows, `video_id` carries the processing request/event ID for compatibility with the
+Spring wire DTO.
 
 Intentional non-success behavior:
 
@@ -146,7 +153,10 @@ Intentional non-success behavior:
 - request failed or not yet `ready`: `409`
 - request marked `ready` without usable artifact rows: `409`
 
-The endpoint is read-only. It does not update processing state, enqueue Celery work, publish Kafka, or create outbox rows. It does not return raw media paths, MinIO object references, credentials, stack traces, Celery internals, ownership metadata, or timing fields that Spring does not currently consume.
+The endpoint is read-only. It does not update processing state, enqueue Celery work, publish
+Kafka, or create outbox rows. It does not return raw media paths, MinIO object references,
+credentials, stack traces, Celery internals, ownership metadata, provider seconds, or
+word-level timing.
 
 Production-grade service-to-service authentication and network policy are not implemented in this phase. Deploy it only on trusted internal networks until that boundary is hardened.
 

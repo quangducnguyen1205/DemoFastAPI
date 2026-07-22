@@ -3,7 +3,6 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
-    Float,
     ForeignKey,
     Integer,
     Index,
@@ -58,8 +57,8 @@ class ProcessingRequestTranscript(Base):
     )
     segment_index = Column(Integer, nullable=False, index=True)
     text = Column(Text, nullable=False)
-    start_seconds = Column(Float, nullable=True)
-    end_seconds = Column(Float, nullable=True)
+    start_ms = Column(BigInteger, nullable=True)
+    end_ms = Column(BigInteger, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -67,6 +66,11 @@ class ProcessingRequestTranscript(Base):
             "processing_request_event_id",
             "segment_index",
             name="uq_processing_request_transcript_segment",
+        ),
+        CheckConstraint(
+            "(start_ms IS NULL AND end_ms IS NULL) OR "
+            "(start_ms IS NOT NULL AND end_ms IS NOT NULL AND start_ms >= 0 AND end_ms >= start_ms)",
+            name="ck_processing_request_transcript_timing",
         ),
     )
 

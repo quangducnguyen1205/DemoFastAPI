@@ -24,4 +24,6 @@ class ProcessingTranscriptRowRead(TranscriptBase):
     id: str
     video_id: str
     segment_index: int
+    start_ms: int | None = None
+    end_ms: int | None = None
     created_at: datetime

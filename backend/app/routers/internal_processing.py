@@ -39,6 +39,8 @@ def _ensure_usable_rows(
         or not row.text
         or not row.text.strip()
         or row.created_at is None
+        or (row.start_ms is None) != (row.end_ms is None)
+        or (row.start_ms is not None and (row.start_ms < 0 or row.end_ms < row.start_ms))
         for row in rows
     ):
         logger.warning(
@@ -108,6 +110,8 @@ def get_processing_request_transcript_rows(
             id=str(row.id),
             video_id=row.processing_request_event_id,
             segment_index=row.segment_index,
+            start_ms=row.start_ms,
+            end_ms=row.end_ms,
             text=row.text,
             created_at=row.created_at,
         )

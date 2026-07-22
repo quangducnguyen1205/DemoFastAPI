@@ -49,12 +49,7 @@ class ExecuteProcessingApplicationService:
         try:
             with self._media_source.acquire(command) as media_path:
                 segments = self._transcriber.transcribe(media_path, command=command, task_id=task_id)
-            artifact = ProcessingArtifact(
-                tuple(
-                    ProcessingTranscriptRow(segment_index=index, text=segment)
-                    for index, segment in enumerate(segments)
-                )
-            )
+            artifact = ProcessingArtifact(tuple(segments))
             outcome = ProcessingSucceeded(command.event_id, command.asset_id, artifact, self._clock())
             self._artifact_store.persist_success(outcome)
             self._result_sink.record(outcome)
@@ -102,7 +97,8 @@ class ExecuteDirectUploadProcessingApplicationService:
         if not self._artifact_store.exists(video_id):
             return {"status": "failed", "error": f"Video {video_id} not found"}
         try:
-            segments = self._transcriber.transcribe(media_path, task_id=task_id, video_id=video_id)
+            rows = self._transcriber.transcribe(media_path, task_id=task_id, video_id=video_id)
+            segments = tuple(row.text for row in rows)
             self._artifact_store.persist_ready(video_id, segments)
             return {"status": "ready", "segments": list(segments)}
         except Exception as exc:

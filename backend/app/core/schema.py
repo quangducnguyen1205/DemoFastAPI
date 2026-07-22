@@ -14,6 +14,11 @@ _RECOVERY_COLUMNS = {
     "recovery_exhausted_at": "TIMESTAMP WITH TIME ZONE",
 }
 
+_TRANSCRIPT_TIMING_COLUMNS = {
+    "start_ms": "BIGINT",
+    "end_ms": "BIGINT",
+}
+
 # Stable Project3 FastAPI PostgreSQL session advisory lock for schema creation and upgrades.
 # This value is intentionally fixed rather than derived from Python's process-randomized hash().
 _POSTGRES_SCHEMA_INITIALIZATION_LOCK_KEY = 5_126_144_801
@@ -28,6 +33,7 @@ def initialize_database_schema(bind: Engine = engine) -> None:
 
     Base.metadata.create_all(bind=bind)
     ensure_processing_outbox_recovery_schema(bind)
+    ensure_processing_transcript_timing_schema(bind)
 
 
 def _initialize_postgresql_schema(bind: Engine) -> None:
@@ -44,6 +50,7 @@ def _initialize_postgresql_schema(bind: Engine) -> None:
 
             Base.metadata.create_all(bind=connection)
             ensure_processing_outbox_recovery_schema(connection)
+            ensure_processing_transcript_timing_schema(connection)
             connection.commit()
             logger.info("PostgreSQL schema initialization ready")
         except Exception:
@@ -76,6 +83,66 @@ def ensure_processing_outbox_recovery_schema(bind: Engine | Connection) -> None:
         with bind.begin() as connection:
             _apply_processing_outbox_recovery_schema(connection, dialect, existing_columns)
     logger.info("processing outbox recovery schema verified")
+
+
+def ensure_processing_transcript_timing_schema(bind: Engine | Connection) -> None:
+    inspector = inspect(bind)
+    if "processing_request_transcripts" not in inspector.get_table_names():
+        return
+
+    existing_columns = {
+        column["name"] for column in inspector.get_columns("processing_request_transcripts")
+    }
+    dialect = bind.dialect.name
+    if isinstance(bind, Connection):
+        _apply_processing_transcript_timing_schema(bind, dialect, existing_columns)
+    else:
+        with bind.begin() as connection:
+            _apply_processing_transcript_timing_schema(connection, dialect, existing_columns)
+    logger.info("processing transcript timing schema verified")
+
+
+def _apply_processing_transcript_timing_schema(
+    connection: Connection,
+    dialect: str,
+    existing_columns: set[str],
+) -> None:
+    for column_name, column_type in _TRANSCRIPT_TIMING_COLUMNS.items():
+        if dialect == "postgresql":
+            connection.execute(text(
+                f"ALTER TABLE processing_request_transcripts "
+                f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+            ))
+        elif column_name not in existing_columns:
+            connection.execute(text(
+                f"ALTER TABLE processing_request_transcripts ADD COLUMN {column_name} {column_type}"
+            ))
+
+    if dialect == "postgresql":
+        connection.execute(text(
+            """
+            DO $phase1$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'ck_processing_request_transcript_timing'
+                ) THEN
+                    ALTER TABLE processing_request_transcripts
+                    ADD CONSTRAINT ck_processing_request_transcript_timing CHECK (
+                        (start_ms IS NULL AND end_ms IS NULL)
+                        OR (
+                            start_ms IS NOT NULL
+                            AND end_ms IS NOT NULL
+                            AND start_ms >= 0
+                            AND end_ms >= start_ms
+                        )
+                    );
+                END IF;
+            END
+            $phase1$;
+            """
+        ))
 
 
 def _apply_processing_outbox_recovery_schema(

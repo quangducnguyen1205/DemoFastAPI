@@ -139,7 +139,12 @@ Spring can retrieve Kafka-originated transcript artifacts through the internal r
 GET /internal/processing-requests/{processingRequestId}/transcript-rows
 ```
 
-The endpoint returns ordered rows with `id`, `video_id`, `segment_index`, `text`, and `created_at`, matching Spring's existing FastAPI transcript-row DTO. It returns `404` for unknown processing requests and `409` when a request is failed, not ready, or ready without usable transcript artifacts. It is an internal deployment contract only; production-grade service-to-service authentication and network policy are not implemented in this phase.
+The endpoint returns ordered rows with `id`, `video_id`, `segment_index`, nullable integer-
+millisecond `start_ms`/`end_ms`, `text`, and `created_at`. Legacy artifacts return null timing.
+It returns `404` for unknown processing requests and `409` when a request is failed, not ready,
+or ready without usable transcript artifacts. It is an internal deployment contract only;
+production-grade service-to-service authentication and network policy are not implemented in
+this phase.
 
 Run the relay once from local Python:
 

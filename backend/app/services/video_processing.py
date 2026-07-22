@@ -2,7 +2,7 @@ import os
 import subprocess
 import logging
 import threading
-from typing import List
+from typing import Any, List
 from app.utils import DEFAULT_TRANSCRIPT_CHUNK_CHARS, split_transcript_text
 
 logger = logging.getLogger(__name__)
@@ -31,15 +31,17 @@ def extract_audio_to_wav(abs_video_path: str, temp_dir: str, sample_rate: int = 
     return audio_path
 
 
-def transcribe_audio_with_whisper(audio_path: str) -> str | None:
-    """Transcribe audio using Whisper (base model). Returns full text or None."""
+def transcribe_audio_with_whisper(audio_path: str) -> dict[str, Any] | None:
+    """Transcribe audio using Whisper (base model). Returns the provider result or None."""
     try:
         model = get_whisper_model()
         result = model.transcribe(audio_path)
-        return (result.get("text", "") or "").strip() or None
     except Exception as e:
         logger.warning("Whisper transcription failed: %s", e)
         return None
+    if not isinstance(result, dict):
+        raise ValueError("Whisper returned a non-object transcription result")
+    return result
 
 
 def segment_text(full_text: str, max_len: int = DEFAULT_TRANSCRIPT_CHUNK_CHARS) -> List[str]:

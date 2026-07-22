@@ -124,7 +124,7 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
 - Deprecated `POST /videos/upload` still returns `{task_id, status, video_id}` and remains callable by Spring rollback mode.
 - `GET /videos/tasks/{task_id}` still mirrors Celery task state.
 - `GET /videos/{video_id}/transcript` still returns ordered transcript rows by `segment_index`.
-- `GET /internal/processing-requests/{processingRequestId}/transcript-rows` returns Kafka-originated processing artifact rows ordered by `segment_index`. It returns `404` for unknown processing requests and `409` when a request is failed, not ready, or ready without usable transcript artifacts.
+- `GET /internal/processing-requests/{processingRequestId}/transcript-rows` returns Kafka-originated processing artifact rows ordered by `segment_index`, including nullable integer-millisecond `start_ms`/`end_ms`. Legacy artifacts return null timing. It returns `404` for unknown processing requests and `409` when a request is failed, not ready, or ready without usable transcript artifacts.
 - `owner_id` is still accepted on upload and returned on video reads for backward compatibility, but Repo A does not treat it as an authorization boundary.
 - Kafka delivery is at-least-once. The consumer is idempotent by `eventId` using the local `processing_requests` table and commits valid offsets after successful Celery handoff.
 - Result publication is also at-least-once. Producer idempotence does not make the outbox relay end-to-end exactly-once because a process can still publish and crash before marking the row `published`. Spring consumers must be idempotent by result `eventId`.

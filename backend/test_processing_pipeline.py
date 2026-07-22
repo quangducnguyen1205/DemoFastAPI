@@ -18,6 +18,7 @@ from app.processing.domain.models import (
     ProcessingRequestCommand,
     ProcessingSkipped,
     ProcessingSucceeded,
+    ProcessingTranscriptRow,
 )
 from app.processing.ports.request_repository import ProcessingRequestState
 from app.processing.ports.task_dispatcher import ProcessingDispatch
@@ -126,13 +127,16 @@ class DispatchApplicationServiceTest(unittest.TestCase):
 
 
 class ExecuteProcessingApplicationServiceTest(unittest.TestCase):
-    def build_service(self, *, segments=("first", "second"), failure=None, status=None):
+    def build_service(self, *, segments=None, failure=None, status=None):
         store = MagicMock()
         store.claim.return_value = status
         sink = MagicMock()
         transcriber = MagicMock()
         if failure is None:
-            transcriber.transcribe.return_value = segments
+            transcriber.transcribe.return_value = segments or (
+                ProcessingTranscriptRow(0, "first", 0, 1250),
+                ProcessingTranscriptRow(1, "second", 1250, 2500),
+            )
         else:
             transcriber.transcribe.side_effect = failure
 
@@ -157,6 +161,7 @@ class ExecuteProcessingApplicationServiceTest(unittest.TestCase):
         self.assertIsInstance(outcome, ProcessingSucceeded)
         self.assertEqual([row.segment_index for row in outcome.artifact.rows], [0, 1])
         self.assertEqual([row.text for row in outcome.artifact.rows], ["first", "second"])
+        self.assertEqual([row.start_ms for row in outcome.artifact.rows], [0, 1250])
         transcriber.transcribe.assert_called_once()
         store.persist_success.assert_called_once_with(outcome)
         sink.record.assert_called_once_with(outcome)

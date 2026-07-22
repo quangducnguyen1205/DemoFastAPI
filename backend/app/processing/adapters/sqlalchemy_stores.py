@@ -113,8 +113,8 @@ class SqlAlchemyProcessingArtifactStore:
                     processing_request_event_id=outcome.event_id,
                     segment_index=row.segment_index,
                     text=row.text,
-                    start_seconds=row.start_seconds,
-                    end_seconds=row.end_seconds,
+                    start_ms=row.start_ms,
+                    end_ms=row.end_ms,
                 )
             )
         request = self.db.query(models.ProcessingRequest).filter(
