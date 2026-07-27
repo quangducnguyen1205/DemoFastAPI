@@ -92,15 +92,26 @@ The consumer commits valid offsets only after successful Celery handoff. Invalid
 The Kafka V1 object-storage task uses late acknowledgement,
 `reject_on_worker_lost=true`, and prefetch multiplier `1`. A worker process loss therefore
 allows broker redelivery; the database lease remains the execution guard. Redelivery during
-an active lease skips MinIO/ffmpeg/Whisper and schedules the task for lease expiry. A controlled
-processing exception is converted to one durable terminal `failed` result and returns normally,
-so it does not create an unbounded Celery retry loop.
+an active lease skips MinIO/ffmpeg/Whisper and polls the database again after a bounded short
+countdown. A controlled processing exception is converted to one durable terminal `failed`
+result and returns normally, so it does not create an unbounded Celery retry loop.
 
 The local `PROCESSING_LEASE_SECONDS=14400` default is intentionally conservative. Before adding
 Celery hard/soft task limits or using production-sized media, coordinate the lease with those
 limits and measured Whisper throughput. Too-short leases can allow two workers to perform the
 same external transcription; attempt fencing and result idempotency still prevent duplicate
 terminal product effects, but they cannot eliminate duplicated external compute.
+
+Celery 5.5's Redis transport defaults to a 3600-second visibility timeout. The Compose defaults
+make that value explicit with `CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS=3600` across Celery
+producers and workers, and configure `PROCESSING_LEASE_RETRY_POLL_SECONDS=300`. The application
+accepts poll values from 1 through 300 seconds, fails startup if the poll is not shorter than
+visibility, and caps every calculated retry below visibility. Do not set polling to the full
+processing lease: Redis can redeliver an
+unacknowledged ETA repeatedly after visibility expires, and workers hold ETA messages in memory.
+The one-hour visibility default is deliberately not raised to four hours because a forced
+worker/host loss would then delay broker recovery for up to four hours. If applications share a
+Redis broker, keep the visibility settings aligned because the shortest configured value wins.
 
 ## Project3 cross-compose integration
 

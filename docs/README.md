@@ -42,7 +42,10 @@ active lease is skipped; an expired processing lease is reclaimed as the next fe
 Worker-loss delivery is late-acknowledged and requeued, while a controlled failure that
 successfully records its terminal result is acknowledged without a Celery retry loop.
 `PROCESSING_LEASE_SECONDS` defaults to 14400 seconds and must be sized against future Celery
-task limits plus observed Whisper throughput. YouTube V2 and yt-dlp acquisition are not part
+task limits plus observed Whisper throughput. Active-lease delivery uses bounded 300-second
+polls instead of a four-hour ETA; every poll is validated below the explicit 3600-second Redis
+visibility timeout and produces at most one successor. The database status/expiry check, not
+Redis scheduling, remains the execution guard. YouTube V2 and yt-dlp acquisition are not part
 of this foundation.
 
 ## Persistence boundary

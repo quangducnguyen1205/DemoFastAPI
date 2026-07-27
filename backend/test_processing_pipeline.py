@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from celery.exceptions import Retry
 
+from app.config.settings import settings
 from app.core.celery_app import celery_app
 from app.consumers.asset_processing_consumer import handle_asset_processing_message
 from app.events.asset_processing import EventValidationError, parse_asset_processing_requested_event
@@ -28,7 +29,11 @@ from app.processing.domain.models import (
 )
 from app.processing.ports.request_repository import ProcessingRequestState
 from app.processing.ports.task_dispatcher import ProcessingDispatch
-from app.tasks.video_tasks import process_asset_object_task, process_video_task
+from app.tasks.video_tasks import (
+    _lease_retry_delay_seconds,
+    process_asset_object_task,
+    process_video_task,
+)
 
 
 def request_event() -> dict:
@@ -196,6 +201,21 @@ class ExecuteProcessingApplicationServiceTest(unittest.TestCase):
         sink.record.assert_not_called()
         store.commit.assert_not_called()
 
+    def test_active_processing_lease_skips_external_processing(self) -> None:
+        service, store, sink, transcriber = self.build_service()
+        retry_at = datetime(2026, 7, 13, tzinfo=UTC) + timedelta(hours=4)
+        store.claim.return_value = ProcessingClaimConflict(
+            "processing",
+            lease_expires_at=retry_at,
+        )
+        outcome = service.execute(command())
+        self.assertIsInstance(outcome, ProcessingSkipped)
+        self.assertEqual(outcome.status, "processing")
+        self.assertEqual(outcome.retry_at, retry_at)
+        transcriber.transcribe.assert_not_called()
+        sink.record.assert_not_called()
+        store.commit.assert_not_called()
+
 
 class CeleryWorkerAdapterTest(unittest.TestCase):
     def test_task_names_and_worker_discovery_metadata_are_unchanged(self) -> None:
@@ -208,9 +228,55 @@ class CeleryWorkerAdapterTest(unittest.TestCase):
         self.assertTrue(process_asset_object_task.reject_on_worker_lost)
         self.assertIsNone(process_asset_object_task.max_retries)
         self.assertEqual(celery_app.conf.worker_prefetch_multiplier, 1)
+        self.assertEqual(
+            celery_app.conf.broker_transport_options["visibility_timeout"],
+            settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            celery_app.conf.result_backend_transport_options["visibility_timeout"],
+            settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            celery_app.conf.visibility_timeout,
+            settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS,
+        )
+        self.assertLess(
+            settings.PROCESSING_LEASE_RETRY_POLL_SECONDS,
+            settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS,
+        )
         self.assertFalse(bool(process_video_task.acks_late))
 
-    def test_active_lease_redelivery_is_deferred_until_expiry(self) -> None:
+    def test_retry_poll_is_bounded_below_redis_visibility_timeout(self) -> None:
+        now = datetime(2026, 7, 13, tzinfo=UTC)
+        self.assertEqual(
+            _lease_retry_delay_seconds(
+                now + timedelta(hours=4),
+                now=now,
+                poll_seconds=300,
+                visibility_timeout_seconds=3_600,
+            ),
+            300,
+        )
+        self.assertEqual(
+            _lease_retry_delay_seconds(
+                now + timedelta(seconds=120),
+                now=now,
+                poll_seconds=300,
+                visibility_timeout_seconds=3_600,
+            ),
+            120,
+        )
+        self.assertEqual(
+            _lease_retry_delay_seconds(
+                now + timedelta(hours=4),
+                now=now,
+                poll_seconds=5_000,
+                visibility_timeout_seconds=3_600,
+            ),
+            3_599,
+        )
+
+    def test_active_lease_redelivery_polls_without_external_processing(self) -> None:
         retry_at = datetime(2026, 7, 13, tzinfo=UTC) + timedelta(hours=4)
         service = MagicMock()
         service.execute.return_value = ProcessingSkipped(
@@ -221,13 +287,68 @@ class CeleryWorkerAdapterTest(unittest.TestCase):
         )
         with (
             patch("app.tasks.video_tasks.build_processing_execution_service", return_value=service),
-            patch("app.tasks.video_tasks._lease_retry_delay_seconds", return_value=14_400),
+            patch("app.tasks.video_tasks._lease_retry_delay_seconds", return_value=300),
             patch.object(process_asset_object_task, "retry", side_effect=Retry()) as retry,
             self.assertRaises(Retry),
         ):
             process_asset_object_task.run(encode_processing_task_payload(command()))
-        retry.assert_called_once_with(countdown=14_400)
+        retry.assert_called_once_with(countdown=300)
+        service.execute.assert_called_once()
         service.close.assert_called_once_with()
+
+    def test_duplicate_delivery_polling_creates_only_one_successor_per_delivery(self) -> None:
+        service = MagicMock()
+        service.execute.return_value = ProcessingSkipped(
+            "event-1",
+            "asset-1",
+            "processing",
+            retry_at=datetime(2026, 7, 13, tzinfo=UTC) + timedelta(hours=4),
+        )
+        deliveries = 4
+        with (
+            patch("app.tasks.video_tasks.build_processing_execution_service", return_value=service),
+            patch("app.tasks.video_tasks._lease_retry_delay_seconds", return_value=300),
+            patch.object(process_asset_object_task, "retry", side_effect=Retry()) as retry,
+        ):
+            for _index in range(deliveries):
+                with self.assertRaises(Retry):
+                    process_asset_object_task.run(encode_processing_task_payload(command()))
+        self.assertEqual(retry.call_count, deliveries)
+        self.assertEqual(service.execute.call_count, deliveries)
+        self.assertEqual(service.close.call_count, deliveries)
+        self.assertTrue(
+            all(call.kwargs == {"countdown": 300} for call in retry.call_args_list)
+        )
+
+    def test_active_lease_poll_then_expired_reclaim_reaches_success_once(self) -> None:
+        active = ProcessingSkipped(
+            "event-1",
+            "asset-1",
+            "processing",
+            retry_at=datetime(2026, 7, 13, tzinfo=UTC) + timedelta(minutes=5),
+        )
+        recovered = ProcessingSucceeded(
+            "event-1",
+            "asset-1",
+            SimpleNamespace(rows=(SimpleNamespace(text="recovered"),), segment_count=1),
+            datetime(2026, 7, 13, tzinfo=UTC) + timedelta(minutes=5),
+        )
+        service = MagicMock()
+        service.execute.side_effect = (active, recovered)
+        with (
+            patch("app.tasks.video_tasks.build_processing_execution_service", return_value=service),
+            patch("app.tasks.video_tasks._lease_retry_delay_seconds", return_value=300),
+            patch.object(process_asset_object_task, "retry", side_effect=Retry()) as retry,
+        ):
+            with self.assertRaises(Retry):
+                process_asset_object_task.run(encode_processing_task_payload(command()))
+            result = process_asset_object_task.run(encode_processing_task_payload(command()))
+        self.assertEqual(
+            result,
+            {"status": "ready", "asset_id": "asset-1", "segments": ["recovered"]},
+        )
+        retry.assert_called_once_with(countdown=300)
+        self.assertEqual(service.execute.call_count, 2)
 
     def test_controlled_terminal_failure_returns_without_celery_retry(self) -> None:
         error = RuntimeError("provider unavailable")

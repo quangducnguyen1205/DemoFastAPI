@@ -73,10 +73,25 @@ in one transaction. The result outbox uniqueness contract remains unchanged.
 14400 seconds (four hours) for conservative local Whisper execution. Operators must coordinate
 it with any future Celery task limits and measured media-size/Whisper throughput. The current
 worker uses one-message prefetch for the long-running task, late acknowledgement, and
-worker-lost rejection/requeue. If a redelivered task reaches an active lease, the application
-skips external work and Celery defers the delivery until lease expiry. A controlled processing
-exception that was durably recorded as `failed` returns normally and is acknowledged rather
-than entering an uncontrolled retry loop.
+worker-lost rejection/requeue.
+
+Redis transport keeps its one-hour visibility timeout explicit through
+`CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS=3600`. Active-lease redelivery does not schedule a
+countdown for the remaining four-hour lease. It publishes one successor after at most
+`PROCESSING_LEASE_RETRY_POLL_SECONDS=300`, acknowledges the current delivery through Celery's
+normal `Retry` handling, and checks the database again. Configuration rejects a poll interval
+outside 1–300 seconds or greater than or equal to the broker visibility timeout, and the delay
+calculation also caps defensively below that timeout. Thus a retry ETA cannot cross Redis
+visibility and be restored repeatedly while an old copy remains scheduled in worker memory.
+
+`max_retries=None` is intentional for worker-loss recovery, but does not make a controlled
+failure retry forever. The database lease has a finite expiry, each delivery creates at most
+one successor, and the chain stops at reclaim or any terminal state. A numeric Celery retry
+limit could strand a request after enough worker losses; terminal controlled failures instead
+return normally and are acknowledged. Repeated independent broker deliveries may each create
+one short polling chain, but this design has no branching retry amplification. The existing
+database claim and attempt fence still prevent MinIO/ffmpeg/Whisper work while a lease is
+active.
 
 This foundation protects only the existing Kafka V1 object-storage path. YouTube V2 acquisition,
 its payload/source model, and yt-dlp are not implemented. Lease expiry can permit duplicate

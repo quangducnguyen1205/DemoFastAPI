@@ -81,11 +81,26 @@ class Settings:
         "CELERY_WORKER_PREFETCH_MULTIPLIER",
         1,
     )
+    CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = _env_bounded_positive_int(
+        "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS",
+        3_600,
+        86_400,
+    )
+    PROCESSING_LEASE_RETRY_POLL_SECONDS: int = _env_bounded_positive_int(
+        "PROCESSING_LEASE_RETRY_POLL_SECONDS",
+        300,
+        300,
+    )
     PROCESSING_LEASE_SECONDS: int = _env_bounded_positive_int(
         "PROCESSING_LEASE_SECONDS",
         14_400,
         604_800,
     )
+    if PROCESSING_LEASE_RETRY_POLL_SECONDS >= CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS:
+        raise ValueError(
+            "PROCESSING_LEASE_RETRY_POLL_SECONDS must be less than "
+            "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS"
+        )
 
     # Kafka consumer configuration. The broker itself is owned outside this repo.
     KAFKA_BOOTSTRAP_SERVERS: str = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")

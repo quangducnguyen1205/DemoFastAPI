@@ -3,6 +3,7 @@ import logging
 import math
 import time
 
+from app.config.settings import settings
 from app.core.celery_app import celery_app
 from app.processing.adapters.celery_dispatcher import decode_processing_task_payload
 from app.bootstrap.worker import (
@@ -19,13 +20,26 @@ from app.processing.adapters.timing import log_processing_timing
 logger = logging.getLogger(__name__)
 
 
-def _lease_retry_delay_seconds(retry_at: datetime, *, now: datetime | None = None) -> int:
+def _lease_retry_delay_seconds(
+    retry_at: datetime,
+    *,
+    now: datetime | None = None,
+    poll_seconds: int | None = None,
+    visibility_timeout_seconds: int | None = None,
+) -> int:
     if retry_at.tzinfo is None:
         retry_at = retry_at.replace(tzinfo=UTC)
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
-    return max(1, math.ceil((retry_at - current).total_seconds()))
+    poll_limit = poll_seconds or settings.PROCESSING_LEASE_RETRY_POLL_SECONDS
+    visibility_limit = (
+        visibility_timeout_seconds
+        or settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS
+    )
+    broker_safe_limit = max(1, visibility_limit - 1)
+    remaining_seconds = max(1, math.ceil((retry_at - current).total_seconds()))
+    return min(remaining_seconds, poll_limit, broker_safe_limit)
 
 
 @celery_app.task(name="process_video", bind=True)
@@ -76,10 +90,11 @@ def process_asset_object_task(self, request: dict) -> dict:
             if outcome.status == "processing" and outcome.retry_at is not None:
                 retry_delay = _lease_retry_delay_seconds(outcome.retry_at)
                 logger.info(
-                    "deferring active processing lease redelivery event_id=%s asset_id=%s retry_in_seconds=%s",
+                    "polling active processing lease event_id=%s asset_id=%s retry_in_seconds=%s lease_expires_at=%s",
                     outcome.event_id,
                     outcome.asset_id,
                     retry_delay,
+                    outcome.retry_at.isoformat(),
                 )
                 raise self.retry(countdown=retry_delay)
             result = {"status": outcome.status, "asset_id": outcome.asset_id, "duplicate": True}
