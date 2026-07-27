@@ -1,9 +1,12 @@
 import unittest
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from celery.exceptions import Retry
+
+from app.core.celery_app import celery_app
 from app.consumers.asset_processing_consumer import handle_asset_processing_message
 from app.events.asset_processing import EventValidationError, parse_asset_processing_requested_event
 from app.processing.adapters.celery_dispatcher import (
@@ -13,8 +16,11 @@ from app.processing.adapters.celery_dispatcher import (
 from app.processing.application.dispatch import DispatchProcessingApplicationService
 from app.processing.application.execute import ExecuteProcessingApplicationService
 from app.processing.domain.models import (
+    ProcessingClaimConflict,
     ProcessingExecutionCommand,
     ProcessingFailed,
+    ProcessingFailure,
+    ProcessingLease,
     ProcessingRequestCommand,
     ProcessingSkipped,
     ProcessingSucceeded,
@@ -129,7 +135,6 @@ class DispatchApplicationServiceTest(unittest.TestCase):
 class ExecuteProcessingApplicationServiceTest(unittest.TestCase):
     def build_service(self, *, segments=None, failure=None, status=None):
         store = MagicMock()
-        store.claim.return_value = status
         sink = MagicMock()
         transcriber = MagicMock()
         if failure is None:
@@ -146,6 +151,11 @@ class ExecuteProcessingApplicationServiceTest(unittest.TestCase):
                 yield "/tmp/media.mp4"
 
         fixed_now = datetime(2026, 7, 13, tzinfo=UTC)
+        store.claim.return_value = (
+            ProcessingClaimConflict(status)
+            if status is not None
+            else ProcessingLease(1, fixed_now, fixed_now + timedelta(hours=4))
+        )
         service = ExecuteProcessingApplicationService(
             media_source=MediaSource(),
             transcriber=transcriber,
@@ -163,7 +173,7 @@ class ExecuteProcessingApplicationServiceTest(unittest.TestCase):
         self.assertEqual([row.text for row in outcome.artifact.rows], ["first", "second"])
         self.assertEqual([row.start_ms for row in outcome.artifact.rows], [0, 1250])
         transcriber.transcribe.assert_called_once()
-        store.persist_success.assert_called_once_with(outcome)
+        store.persist_success.assert_called_once_with(outcome, attempt_count=1)
         sink.record.assert_called_once_with(outcome)
         store.commit.assert_called_once_with()
 
@@ -174,7 +184,7 @@ class ExecuteProcessingApplicationServiceTest(unittest.TestCase):
         self.assertIsInstance(outcome, ProcessingFailed)
         self.assertEqual(outcome.failure.diagnostic_message, "provider unavailable")
         store.rollback.assert_called_once_with()
-        store.persist_failure.assert_called_once_with(outcome)
+        store.persist_failure.assert_called_once_with(outcome, attempt_count=1)
         sink.record.assert_called_once_with(outcome)
         store.commit.assert_called_once_with()
 
@@ -191,6 +201,59 @@ class CeleryWorkerAdapterTest(unittest.TestCase):
     def test_task_names_and_worker_discovery_metadata_are_unchanged(self) -> None:
         self.assertEqual(process_video_task.name, "process_video")
         self.assertEqual(process_asset_object_task.name, "process_asset_object")
+
+    def test_object_task_uses_retry_safe_delivery_without_changing_direct_upload(self) -> None:
+        self.assertTrue(process_asset_object_task.acks_late)
+        self.assertTrue(process_asset_object_task.acks_on_failure_or_timeout)
+        self.assertTrue(process_asset_object_task.reject_on_worker_lost)
+        self.assertIsNone(process_asset_object_task.max_retries)
+        self.assertEqual(celery_app.conf.worker_prefetch_multiplier, 1)
+        self.assertFalse(bool(process_video_task.acks_late))
+
+    def test_active_lease_redelivery_is_deferred_until_expiry(self) -> None:
+        retry_at = datetime(2026, 7, 13, tzinfo=UTC) + timedelta(hours=4)
+        service = MagicMock()
+        service.execute.return_value = ProcessingSkipped(
+            "event-1",
+            "asset-1",
+            "processing",
+            retry_at=retry_at,
+        )
+        with (
+            patch("app.tasks.video_tasks.build_processing_execution_service", return_value=service),
+            patch("app.tasks.video_tasks._lease_retry_delay_seconds", return_value=14_400),
+            patch.object(process_asset_object_task, "retry", side_effect=Retry()) as retry,
+            self.assertRaises(Retry),
+        ):
+            process_asset_object_task.run(encode_processing_task_payload(command()))
+        retry.assert_called_once_with(countdown=14_400)
+        service.close.assert_called_once_with()
+
+    def test_controlled_terminal_failure_returns_without_celery_retry(self) -> None:
+        error = RuntimeError("provider unavailable")
+        outcome = ProcessingFailed(
+            "event-1",
+            "asset-1",
+            ProcessingFailure("PROCESSING_FAILED", "provider unavailable", error),
+            datetime(2026, 7, 13, tzinfo=UTC),
+        )
+        service = MagicMock()
+        service.execute.return_value = outcome
+        with (
+            patch("app.tasks.video_tasks.build_processing_execution_service", return_value=service),
+            patch.object(process_asset_object_task, "retry") as retry,
+        ):
+            result = process_asset_object_task.run(encode_processing_task_payload(command()))
+        self.assertEqual(
+            result,
+            {
+                "status": "failed",
+                "asset_id": "asset-1",
+                "error": "provider unavailable",
+            },
+        )
+        retry.assert_not_called()
+        service.close.assert_called_once_with()
 
     def test_asset_task_maps_command_and_success_without_owning_the_algorithm(self) -> None:
         outcome = ProcessingSucceeded(

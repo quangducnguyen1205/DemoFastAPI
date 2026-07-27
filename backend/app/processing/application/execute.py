@@ -3,13 +3,16 @@ import logging
 
 from app.processing.domain.models import (
     ProcessingArtifact,
+    ProcessingClaimConflict,
     ProcessingExecutionCommand,
     ProcessingFailed,
     ProcessingFailure,
+    ProcessingLeaseLost,
     ProcessingSkipped,
     ProcessingSucceeded,
     ProcessingTranscriptRow,
 )
+from app.processing.domain.failures import safe_processing_error_message
 from app.processing.ports.artifact_store import DirectUploadArtifactStore, ProcessingArtifactStore
 from app.processing.ports.media_source import ProcessingMediaSource
 from app.processing.ports.result_sink import ProcessingResultSink
@@ -36,42 +39,77 @@ class ExecuteProcessingApplicationService:
         self._clock = clock
 
     def execute(self, command: ProcessingExecutionCommand, *, task_id: str | None = None):
-        existing_status = self._artifact_store.claim(command)
-        if existing_status is not None:
+        claim = self._artifact_store.claim(command, now=self._clock())
+        if isinstance(claim, ProcessingClaimConflict):
             logger.info(
                 "skipping duplicate asset object task event_id=%s asset_id=%s status=%s",
                 command.event_id,
                 command.asset_id,
-                existing_status,
+                claim.status,
             )
-            return ProcessingSkipped(command.event_id, command.asset_id, existing_status)
+            return ProcessingSkipped(
+                command.event_id,
+                command.asset_id,
+                claim.status,
+                retry_at=claim.lease_expires_at if claim.status == "processing" else None,
+            )
 
         try:
             with self._media_source.acquire(command) as media_path:
                 segments = self._transcriber.transcribe(media_path, command=command, task_id=task_id)
             artifact = ProcessingArtifact(tuple(segments))
             outcome = ProcessingSucceeded(command.event_id, command.asset_id, artifact, self._clock())
-            self._artifact_store.persist_success(outcome)
+            self._artifact_store.persist_success(outcome, attempt_count=claim.attempt_count)
             self._result_sink.record(outcome)
             self._artifact_store.commit()
             return outcome
-        except Exception as exc:
-            logger.exception(
-                "Asset object processing failed event_id=%s asset_id=%s",
+        except ProcessingLeaseLost:
+            self._artifact_store.rollback()
+            logger.info(
+                "discarding superseded processing completion event_id=%s asset_id=%s attempt_count=%s",
                 command.event_id,
                 command.asset_id,
+                claim.attempt_count,
+            )
+            return ProcessingSkipped(command.event_id, command.asset_id, "lease_lost")
+        except Exception as exc:
+            logger.warning(
+                "asset object processing failed event_id=%s asset_id=%s failure_type=%s",
+                command.event_id,
+                command.asset_id,
+                type(exc).__name__,
             )
             self._artifact_store.rollback()
             outcome = ProcessingFailed(
                 command.event_id,
                 command.asset_id,
-                ProcessingFailure(DEFAULT_PROCESSING_ERROR_CODE, str(exc), exc),
+                ProcessingFailure(
+                    DEFAULT_PROCESSING_ERROR_CODE,
+                    safe_processing_error_message(exc),
+                    exc,
+                ),
                 self._clock(),
             )
-            self._artifact_store.persist_failure(outcome)
-            self._result_sink.record(outcome)
-            self._artifact_store.commit()
-            return outcome
+            try:
+                self._artifact_store.persist_failure(
+                    outcome,
+                    attempt_count=claim.attempt_count,
+                )
+                self._result_sink.record(outcome)
+                self._artifact_store.commit()
+                return outcome
+            except ProcessingLeaseLost:
+                self._artifact_store.rollback()
+                logger.info(
+                    "discarding superseded processing failure event_id=%s asset_id=%s attempt_count=%s",
+                    command.event_id,
+                    command.asset_id,
+                    claim.attempt_count,
+                )
+                return ProcessingSkipped(command.event_id, command.asset_id, "lease_lost")
+            except Exception:
+                self._artifact_store.rollback()
+                raise
 
     def close(self) -> None:
         self._artifact_store.close()

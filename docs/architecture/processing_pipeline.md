@@ -44,10 +44,44 @@ acquire the referenced object, transcribe/chunk it, construct ordered transcript
 the artifact, record one terminal outcome, and commit. Provider, media, artifact, and durable
 result adapters stay at the edge.
 
-The claim transition is still committed before external media/provider work. Successful
-request status, transcript artifact rows, and result intent still commit together. Failure
-handling still rolls back partial artifact work before writing failed request state and one
-failure result intent. Duplicate tasks still return without downloading or transcribing.
+The claim transition is still committed before external media/provider work, but it is now a
+finite execution lease. Successful request status, transcript artifact rows, and result intent
+still commit together. Failure handling still rolls back partial artifact work before writing
+failed request state and one failure result intent. Duplicate tasks with an active lease return
+without downloading or transcribing.
+
+## Processing lease and crash recovery
+
+`processing_requests` stores nullable `processing_started_at` and `lease_expires_at` plus a
+non-negative `attempt_count`. A conditional database update can claim `accepted` or `enqueued`,
+or reclaim `processing` only when `lease_expires_at <= now`. The winning update sets both
+timestamps, increments `attempt_count`, and commits before MinIO, ffmpeg, or Whisper work.
+An active lease and terminal `ready`/`failed` state cannot be claimed. Legacy non-processing
+rows retain null timestamps and attempt zero; a legacy `processing` row receives only an
+immediately expired lease during schema upgrade, without fabricating a processing start time.
+
+The acquired attempt count is also a fencing token. A terminal update must still match
+`status=processing` and the acquired attempt. This makes the database decide races between an
+expired attempt completing late and its replacement: only one attempt can store the terminal
+status, replace transcript artifacts, and append result intent. Success sets `ready`, replaces
+any incomplete integration artifact rows, records the existing `transcript.ready` v1 intent,
+and clears both lease timestamps in one transaction. Controlled failure stores a sanitized
+diagnostic, records the existing `asset.processing.failed` v1 intent, and clears both timestamps
+in one transaction. The result outbox uniqueness contract remains unchanged.
+
+`PROCESSING_LEASE_SECONDS` is finite, validated from 1 through 604800 seconds, and defaults to
+14400 seconds (four hours) for conservative local Whisper execution. Operators must coordinate
+it with any future Celery task limits and measured media-size/Whisper throughput. The current
+worker uses one-message prefetch for the long-running task, late acknowledgement, and
+worker-lost rejection/requeue. If a redelivered task reaches an active lease, the application
+skips external work and Celery defers the delivery until lease expiry. A controlled processing
+exception that was durably recorded as `failed` returns normally and is acknowledged rather
+than entering an uncontrolled retry loop.
+
+This foundation protects only the existing Kafka V1 object-storage path. YouTube V2 acquisition,
+its payload/source model, and yt-dlp are not implemented. Lease expiry can permit duplicate
+external execution if an original attempt outlives the configured duration, but the attempt
+fence and result-outbox idempotency protect the canonical product/result effects.
 
 ## Direct-upload compatibility
 
@@ -125,6 +159,7 @@ after repository-wide import-string and command searches showed no remaining cal
 ## Remaining FastAPI debt
 
 - There is no crash-age policy for abandoned `publishing` rows.
+- YouTube V2 acquisition and temporary yt-dlp media handling are not implemented.
 - SQLAlchemy metadata plus the existing narrow schema upgrader remain in place instead of
   Alembic migrations.
 - Kafka rejection still commits malformed/unsupported events without a DLQ.

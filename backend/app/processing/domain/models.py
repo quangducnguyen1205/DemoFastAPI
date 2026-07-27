@@ -49,6 +49,23 @@ class ProcessingExecutionCommand:
 
 
 @dataclass(frozen=True)
+class ProcessingLease:
+    attempt_count: int
+    processing_started_at: datetime
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True)
+class ProcessingClaimConflict:
+    status: str
+    lease_expires_at: datetime | None = None
+
+
+class ProcessingLeaseLost(RuntimeError):
+    """Raised when a superseded attempt tries to persist a terminal outcome."""
+
+
+@dataclass(frozen=True)
 class ProcessingTranscriptRow:
     segment_index: int
     text: str
@@ -96,6 +113,7 @@ class ProcessingSkipped:
     event_id: str
     asset_id: str
     status: str
+    retry_at: datetime | None = None
 
 
 ProcessingExecutionResult: TypeAlias = ProcessingOutcome | ProcessingSkipped

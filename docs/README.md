@@ -26,13 +26,24 @@ Repo A on this branch is an internal processing service used by the current inte
 2. Repo A's `consumer` service validates the event envelope and payload.
 3. Repo A writes a `processing_requests` row keyed by `eventId` for idempotency.
 4. Repo A hands object-reference metadata to Celery; raw media bytes are not placed in Kafka or Celery payloads.
-5. The worker downloads the object from MinIO internally before transcription.
+5. The worker atomically acquires a finite processing lease, then downloads the object from
+   MinIO internally before transcription.
 6. The worker stores transcript segment artifacts tied to the `processing_requests.event_id`.
-7. The worker writes a pending processing result outbox row for `transcript.ready` or `asset.processing.failed`.
+7. The worker writes a pending processing result outbox row for `transcript.ready` or
+   `asset.processing.failed` and clears the lease in the same terminal transaction.
 8. When explicitly enabled and invoked, the result relay publishes due outbox rows to `asset.processing.result.v1`.
 9. Spring can retrieve ready transcript artifact rows through `GET /internal/processing-requests/{processingRequestId}/transcript-rows` before persisting its product-owned transcript snapshot.
 
 Offsets for valid events are committed after Celery handoff. Delivery is at-least-once, so duplicate events are handled by `eventId`. Result publishing uses `acks=all` and `enable_idempotence=True` to reduce duplicate records caused by producer retries, but the outbox relay is still at-least-once and Spring consumers must be idempotent by result `eventId`.
+
+Kafka V1 object-storage processing uses `processing_started_at`, `lease_expires_at`, and
+`attempt_count` on the integration request row. Accepted/enqueued work is claimed once; an
+active lease is skipped; an expired processing lease is reclaimed as the next fenced attempt.
+Worker-loss delivery is late-acknowledged and requeued, while a controlled failure that
+successfully records its terminal result is acknowledged without a Celery retry loop.
+`PROCESSING_LEASE_SECONDS` defaults to 14400 seconds and must be sized against future Celery
+task limits plus observed Whisper throughput. YouTube V2 and yt-dlp acquisition are not part
+of this foundation.
 
 ## Persistence boundary
 

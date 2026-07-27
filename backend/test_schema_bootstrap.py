@@ -39,6 +39,11 @@ class PostgreSqlSchemaInitializationLockTest(unittest.TestCase):
             ) as create_all,
             patch.object(
                 schema,
+                "ensure_processing_request_lease_schema",
+                side_effect=lambda _bind: order.append("lease_upgrade"),
+            ) as lease_upgrade,
+            patch.object(
+                schema,
                 "ensure_processing_outbox_recovery_schema",
                 side_effect=lambda _bind: order.append("outbox_upgrade"),
             ) as outbox_upgrade,
@@ -50,8 +55,12 @@ class PostgreSqlSchemaInitializationLockTest(unittest.TestCase):
         ):
             schema.initialize_database_schema(bind)
 
-        self.assertEqual(order, ["lock", "create_all", "outbox_upgrade", "timing_upgrade", "unlock"])
+        self.assertEqual(
+            order,
+            ["lock", "create_all", "lease_upgrade", "outbox_upgrade", "timing_upgrade", "unlock"],
+        )
         create_all.assert_called_once_with(bind=connection)
+        lease_upgrade.assert_called_once_with(connection)
         outbox_upgrade.assert_called_once_with(connection)
         timing_upgrade.assert_called_once_with(connection)
         self.assertEqual(
@@ -90,6 +99,7 @@ class PostgreSqlSchemaInitializationLockTest(unittest.TestCase):
         bind.dialect.name = "sqlite"
         with (
             patch.object(Base.metadata, "create_all") as create_all,
+            patch.object(schema, "ensure_processing_request_lease_schema") as lease_upgrade,
             patch.object(schema, "ensure_processing_outbox_recovery_schema") as outbox_upgrade,
             patch.object(schema, "ensure_processing_transcript_timing_schema") as timing_upgrade,
         ):
@@ -97,6 +107,7 @@ class PostgreSqlSchemaInitializationLockTest(unittest.TestCase):
 
         bind.connect.assert_not_called()
         create_all.assert_called_once_with(bind=bind)
+        lease_upgrade.assert_called_once_with(bind)
         outbox_upgrade.assert_called_once_with(bind)
         timing_upgrade.assert_called_once_with(bind)
 
@@ -106,6 +117,15 @@ class PostgreSqlSchemaInitializationLockTest(unittest.TestCase):
             schema.initialize_database_schema(bind)
             schema.initialize_database_schema(bind)
             self.assertIn("processing_outbox_events", inspect(bind).get_table_names())
+            request_columns = {
+                column["name"]
+                for column in inspect(bind).get_columns("processing_requests")
+            }
+            self.assertTrue(
+                {"processing_started_at", "lease_expires_at", "attempt_count"}.issubset(
+                    request_columns
+                )
+            )
             transcript_columns = {
                 column["name"]
                 for column in inspect(bind).get_columns("processing_request_transcripts")

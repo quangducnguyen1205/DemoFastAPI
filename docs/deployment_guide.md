@@ -24,6 +24,7 @@ docker compose up --build backend worker consumer db redis
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND`
 - `CELERY_WORKER_PREFETCH_MULTIPLIER`
+- `PROCESSING_LEASE_SECONDS` (default: `14400`, valid: `1..604800`)
 - `KAFKA_BOOTSTRAP_SERVERS`
 - `KAFKA_ASSET_PROCESSING_TOPIC` (default: `asset.processing.requested.v1`)
 - `KAFKA_PROCESSING_RESULT_TOPIC` (default: `asset.processing.result.v1`)
@@ -87,6 +88,19 @@ docker compose up --build consumer
 ```
 
 The consumer commits valid offsets only after successful Celery handoff. Invalid or unsupported messages are logged and committed to avoid blocking the partition because this phase has no DLQ. Processing remains at-least-once and idempotent by `eventId`.
+
+The Kafka V1 object-storage task uses late acknowledgement,
+`reject_on_worker_lost=true`, and prefetch multiplier `1`. A worker process loss therefore
+allows broker redelivery; the database lease remains the execution guard. Redelivery during
+an active lease skips MinIO/ffmpeg/Whisper and schedules the task for lease expiry. A controlled
+processing exception is converted to one durable terminal `failed` result and returns normally,
+so it does not create an unbounded Celery retry loop.
+
+The local `PROCESSING_LEASE_SECONDS=14400` default is intentionally conservative. Before adding
+Celery hard/soft task limits or using production-sized media, coordinate the lease with those
+limits and measured Whisper throughput. Too-short leases can allow two workers to perform the
+same external transcription; attempt fencing and result idempotency still prevent duplicate
+terminal product effects, but they cannot eliminate duplicated external compute.
 
 ## Project3 cross-compose integration
 
@@ -184,11 +198,13 @@ Stuck `publishing` recovery after process interruption and a full Kafka DLQ/park
 The automatic relay publishes only due FastAPI processing-result outbox rows through the existing supported contracts: `transcript.ready` and `asset.processing.failed`. It is not a generic event relay and does not place transcript text, media bytes, object storage credentials, tokens, stack traces, or product ownership data in result payloads. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the automatic relay with the Project3 overlay in the fully automatic Spring/FastAPI path: Spring automatic request relay, FastAPI consumer/Celery, FastAPI automatic result relay, and Spring automatic result listener completed one upload without manual request/result controls. Direct upload was not exercised; current Spring uses only the Kafka/outbox processing path. Indexing/search stayed disabled in that historical run.
 
 This repository does not use Alembic yet. Startup uses SQLAlchemy metadata for new databases and
-idempotent narrow schema upgrades for processing-outbox recovery metadata and nullable transcript
-timing on existing local databases. Pre-existing failed rows become `unknown`, retain event
-identity, and are never automatically reconciled. Do not edit rows directly; investigate
-recovery-exhausted failures and use retained operator controls only after the publisher dependency
-is healthy.
+idempotent narrow schema upgrades for processing-request leases, processing-outbox recovery
+metadata, and nullable transcript timing on existing local databases. Legacy attempt counts
+become zero; non-processing lease timestamps remain null; legacy `processing` rows become
+immediately reclaimable without a fabricated start time. Pre-existing failed outbox rows become
+`unknown`, retain event identity, and are never automatically reconciled. Do not edit rows
+directly; investigate recovery-exhausted failures and use retained operator controls only after
+the publisher dependency is healthy.
 
 ## Runtime validation
 

@@ -1,9 +1,15 @@
+from datetime import timedelta
+
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models
 from app.processing.domain.models import (
+    ProcessingClaimConflict,
     ProcessingFailed,
+    ProcessingLease,
+    ProcessingLeaseLost,
     ProcessingRequestCommand,
     ProcessingSucceeded,
 )
@@ -83,27 +89,79 @@ class SqlAlchemyProcessingRequestRepository:
 
 
 class SqlAlchemyProcessingArtifactStore:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, *, lease_seconds: int) -> None:
         self.db = db
+        self._lease_seconds = lease_seconds
 
-    def claim(self, command) -> str | None:
+    def claim(self, command, *, now) -> ProcessingLease | ProcessingClaimConflict:
+        lease_expires_at = now + timedelta(seconds=self._lease_seconds)
         updated = (
             self.db.query(models.ProcessingRequest)
             .filter(
                 models.ProcessingRequest.event_id == command.event_id,
-                models.ProcessingRequest.status.in_(["accepted", "enqueued"]),
+                or_(
+                    models.ProcessingRequest.status.in_(["accepted", "enqueued"]),
+                    and_(
+                        models.ProcessingRequest.status == "processing",
+                        models.ProcessingRequest.lease_expires_at.is_not(None),
+                        models.ProcessingRequest.lease_expires_at <= now,
+                    ),
+                ),
             )
-            .update({"status": "processing", "error": None}, synchronize_session=False)
+            .update(
+                {
+                    "status": "processing",
+                    "processing_started_at": now,
+                    "lease_expires_at": lease_expires_at,
+                    "attempt_count": models.ProcessingRequest.attempt_count + 1,
+                    "error": None,
+                    "updated_at": now,
+                },
+                synchronize_session=False,
+            )
         )
         self.db.commit()
         if updated:
-            return None
+            claimed = self.db.query(models.ProcessingRequest).filter(
+                models.ProcessingRequest.event_id == command.event_id,
+            ).one()
+            return ProcessingLease(
+                attempt_count=claimed.attempt_count,
+                processing_started_at=claimed.processing_started_at,
+                lease_expires_at=claimed.lease_expires_at,
+            )
         existing = self.db.query(models.ProcessingRequest).filter(
             models.ProcessingRequest.event_id == command.event_id,
         ).first()
-        return existing.status if existing else "missing"
+        return ProcessingClaimConflict(
+            status=existing.status if existing else "missing",
+            lease_expires_at=existing.lease_expires_at if existing else None,
+        )
 
-    def persist_success(self, outcome: ProcessingSucceeded) -> None:
+    def persist_success(self, outcome: ProcessingSucceeded, *, attempt_count: int) -> None:
+        updated = (
+            self.db.query(models.ProcessingRequest)
+            .filter(
+                models.ProcessingRequest.event_id == outcome.event_id,
+                models.ProcessingRequest.status == "processing",
+                models.ProcessingRequest.attempt_count == attempt_count,
+            )
+            .update(
+                {
+                    "status": "ready",
+                    "segment_count": outcome.artifact.segment_count,
+                    "error": None,
+                    "processing_started_at": None,
+                    "lease_expires_at": None,
+                    "updated_at": outcome.completed_at,
+                },
+                synchronize_session=False,
+            )
+        )
+        if updated != 1:
+            raise ProcessingLeaseLost(
+                f"processing lease lost event_id={outcome.event_id} attempt_count={attempt_count}"
+            )
         self.db.query(models.ProcessingRequestTranscript).filter(
             models.ProcessingRequestTranscript.processing_request_event_id == outcome.event_id,
         ).delete(synchronize_session=False)
@@ -117,20 +175,30 @@ class SqlAlchemyProcessingArtifactStore:
                     end_ms=row.end_ms,
                 )
             )
-        request = self.db.query(models.ProcessingRequest).filter(
-            models.ProcessingRequest.event_id == outcome.event_id,
-        ).one()
-        request.status = "ready"
-        request.segment_count = outcome.artifact.segment_count
-        request.error = None
 
-    def persist_failure(self, outcome: ProcessingFailed) -> None:
-        request = self.db.query(models.ProcessingRequest).filter(
-            models.ProcessingRequest.event_id == outcome.event_id,
-        ).first()
-        if request:
-            request.status = "failed"
-            request.error = outcome.failure.diagnostic_message
+    def persist_failure(self, outcome: ProcessingFailed, *, attempt_count: int) -> None:
+        updated = (
+            self.db.query(models.ProcessingRequest)
+            .filter(
+                models.ProcessingRequest.event_id == outcome.event_id,
+                models.ProcessingRequest.status == "processing",
+                models.ProcessingRequest.attempt_count == attempt_count,
+            )
+            .update(
+                {
+                    "status": "failed",
+                    "error": outcome.failure.diagnostic_message,
+                    "processing_started_at": None,
+                    "lease_expires_at": None,
+                    "updated_at": outcome.completed_at,
+                },
+                synchronize_session=False,
+            )
+        )
+        if updated != 1:
+            raise ProcessingLeaseLost(
+                f"processing lease lost event_id={outcome.event_id} attempt_count={attempt_count}"
+            )
 
     def commit(self) -> None:
         self.db.commit()

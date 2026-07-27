@@ -81,6 +81,8 @@ class ProcessingSettingsTest(unittest.TestCase):
         self.assertFalse(settings.PROCESSING_OUTBOX_RELAY_ENABLED)
         self.assertFalse(settings.PROCESSING_OUTBOX_AUTO_RELAY_ENABLED)
         self.assertFalse(settings.PROCESSING_OUTBOX_RECOVERY_ENABLED)
+        self.assertEqual(settings.CELERY_WORKER_PREFETCH_MULTIPLIER, 1)
+        self.assertEqual(settings.PROCESSING_LEASE_SECONDS, 14_400)
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_INTERVAL_SECONDS, 30)
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS, 60)
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE, 50)
@@ -116,6 +118,9 @@ class ProcessingSettingsTest(unittest.TestCase):
             {"PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS": "0"},
             {"PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE": "1001"},
             {"PROCESSING_OUTBOX_RECOVERY_MAX_CYCLES": "101"},
+            {"CELERY_WORKER_PREFETCH_MULTIPLIER": "0"},
+            {"PROCESSING_LEASE_SECONDS": "0"},
+            {"PROCESSING_LEASE_SECONDS": "604801"},
         ):
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):
                 self._load_settings(overrides)

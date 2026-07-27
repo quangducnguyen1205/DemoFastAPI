@@ -112,8 +112,8 @@ class TranscriptArtifactCompatibilityTest(unittest.TestCase):
             ProcessingArtifact((ProcessingTranscriptRow(0, "first", 0, 1235),)),
             datetime(2026, 7, 22, tzinfo=UTC),
         )
-        store = SqlAlchemyProcessingArtifactStore(db)
-        store.persist_success(outcome)
+        store = SqlAlchemyProcessingArtifactStore(db, lease_seconds=14_400)
+        store.persist_success(outcome, attempt_count=0)
         store.commit()
 
         saved = db.query(models.ProcessingRequestTranscript).one()

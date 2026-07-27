@@ -136,6 +136,14 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
 - `GET /internal/processing-requests/{processingRequestId}/transcript-rows` returns Kafka-originated processing artifact rows ordered by `segment_index`, including nullable integer-millisecond `start_ms`/`end_ms`. Legacy artifacts return null timing. It returns `404` for unknown processing requests and `409` when a request is failed, not ready, or ready without usable transcript artifacts.
 - `owner_id` is still accepted on upload and returned on video reads for backward compatibility, but Repo A does not treat it as an authorization boundary.
 - Kafka delivery is at-least-once. The consumer is idempotent by `eventId` using the local `processing_requests` table and commits valid offsets after successful Celery handoff.
+- Kafka V1 object-storage workers claim `processing_requests` with a finite database lease.
+  `processing_started_at` and `lease_expires_at` describe the current attempt;
+  `attempt_count` is a non-negative fencing token. Active leases skip duplicate external work,
+  expired leases are reclaimable, and terminal persistence clears the lease.
+- `PROCESSING_LEASE_SECONDS` defaults to 14400 seconds. It must be coordinated with future
+  Celery task limits and measured Whisper throughput. Worker-loss deliveries use late ACK,
+  requeue, prefetch `1`, and lease-aware delayed retry; controlled terminal failures do not
+  enter an uncontrolled Celery retry loop.
 - Result publication is also at-least-once. Producer idempotence does not make the outbox relay end-to-end exactly-once because a process can still publish and crash before marking the row `published`. Spring consumers must be idempotent by result `eventId`.
 - The automatic result relay only relays due FastAPI processing result outbox rows for the existing `transcript.ready` and `asset.processing.failed` contracts. It does not scan arbitrary event tables and it does not recover rows stuck in `publishing`.
 - FastAPI treats Kafka as transport and MinIO object keys as references; product metadata, authorization, workspace state, and final product status remain owned by Repo B.
@@ -147,7 +155,14 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
 - Generic mode keeps the internal Ollama adapter disabled. The Project3 overlay enables only the validated local provider values; runtime installation and model availability remain operator prerequisites.
 - P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the fully automatic path: Spring `kafka_request` plus automatic request relay, FastAPI consumer/Celery processing from MinIO, FastAPI automatic result relay, and Spring automatic result listener. Direct upload was not exercised; current Spring uses only the Kafka/outbox processing path.
 - Stuck `publishing` recovery, generic all-event relay, production deployment hardening, retry topics, and a full Kafka DLQ remain future work. Direct upload remains standalone compatibility; manual relay remains an executable recovery path.
-- This repo still uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables and applies narrow idempotent upgrades for processing-outbox recovery and processing-artifact timing; historical terminal failures are classified `unknown` instead of being replayed.
+- This repo still uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables
+  and applies narrow idempotent upgrades for processing leases, processing-outbox recovery, and
+  processing-artifact timing; historical terminal failures are classified `unknown` instead of
+  being replayed.
+- This lease foundation currently protects only the existing object-storage Kafka V1 path.
+  YouTube V2/yt-dlp acquisition is not implemented. Lease expiry may permit duplicate external
+  transcription in extreme timing conditions, while attempt fencing and result idempotency
+  protect terminal product/result effects.
 
 ## Documentation
 

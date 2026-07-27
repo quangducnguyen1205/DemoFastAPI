@@ -19,6 +19,12 @@ _TRANSCRIPT_TIMING_COLUMNS = {
     "end_ms": "BIGINT",
 }
 
+_PROCESSING_LEASE_COLUMNS = {
+    "processing_started_at": "TIMESTAMP WITH TIME ZONE",
+    "lease_expires_at": "TIMESTAMP WITH TIME ZONE",
+    "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+}
+
 # Stable Project3 FastAPI PostgreSQL session advisory lock for schema creation and upgrades.
 # This value is intentionally fixed rather than derived from Python's process-randomized hash().
 _POSTGRES_SCHEMA_INITIALIZATION_LOCK_KEY = 5_126_144_801
@@ -32,6 +38,7 @@ def initialize_database_schema(bind: Engine = engine) -> None:
         return
 
     Base.metadata.create_all(bind=bind)
+    ensure_processing_request_lease_schema(bind)
     ensure_processing_outbox_recovery_schema(bind)
     ensure_processing_transcript_timing_schema(bind)
 
@@ -49,6 +56,7 @@ def _initialize_postgresql_schema(bind: Engine) -> None:
             logger.info("acquired PostgreSQL schema initialization lock")
 
             Base.metadata.create_all(bind=connection)
+            ensure_processing_request_lease_schema(connection)
             ensure_processing_outbox_recovery_schema(connection)
             ensure_processing_transcript_timing_schema(connection)
             connection.commit()
@@ -68,6 +76,23 @@ def _initialize_postgresql_schema(bind: Engine) -> None:
                 except Exception:
                     connection.rollback()
                     logger.exception("failed to explicitly release PostgreSQL schema initialization lock")
+
+
+def ensure_processing_request_lease_schema(bind: Engine | Connection) -> None:
+    inspector = inspect(bind)
+    if "processing_requests" not in inspector.get_table_names():
+        return
+
+    existing_columns = {
+        column["name"] for column in inspector.get_columns("processing_requests")
+    }
+    dialect = bind.dialect.name
+    if isinstance(bind, Connection):
+        _apply_processing_request_lease_schema(bind, dialect, existing_columns)
+    else:
+        with bind.begin() as connection:
+            _apply_processing_request_lease_schema(connection, dialect, existing_columns)
+    logger.info("processing request lease schema verified")
 
 
 def ensure_processing_outbox_recovery_schema(bind: Engine | Connection) -> None:
@@ -100,6 +125,104 @@ def ensure_processing_transcript_timing_schema(bind: Engine | Connection) -> Non
         with bind.begin() as connection:
             _apply_processing_transcript_timing_schema(connection, dialect, existing_columns)
     logger.info("processing transcript timing schema verified")
+
+
+def _apply_processing_request_lease_schema(
+    connection: Connection,
+    dialect: str,
+    existing_columns: set[str],
+) -> None:
+    for column_name, column_type in _PROCESSING_LEASE_COLUMNS.items():
+        if dialect == "postgresql":
+            connection.execute(text(
+                f"ALTER TABLE processing_requests "
+                f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+            ))
+        elif column_name not in existing_columns:
+            portable_type = column_type.replace("TIMESTAMP WITH TIME ZONE", "TIMESTAMP")
+            connection.execute(text(
+                f"ALTER TABLE processing_requests ADD COLUMN {column_name} {portable_type}"
+            ))
+
+    connection.execute(text(
+        """
+        UPDATE processing_requests
+        SET attempt_count = 0
+        WHERE attempt_count IS NULL
+        """
+    ))
+    connection.execute(text(
+        """
+        UPDATE processing_requests
+        SET lease_expires_at = CURRENT_TIMESTAMP
+        WHERE status = 'processing'
+          AND processing_started_at IS NULL
+          AND lease_expires_at IS NULL
+          AND attempt_count = 0
+        """
+    ))
+
+    if dialect == "postgresql":
+        connection.execute(text(
+            """
+            ALTER TABLE processing_requests
+            ALTER COLUMN attempt_count SET DEFAULT 0,
+            ALTER COLUMN attempt_count SET NOT NULL
+            """
+        ))
+        connection.execute(text(
+            """
+            DO $phase2$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint constraint_record
+                    JOIN pg_class table_record
+                      ON table_record.oid = constraint_record.conrelid
+                    JOIN pg_namespace schema_record
+                      ON schema_record.oid = table_record.relnamespace
+                    WHERE constraint_record.conname =
+                          'ck_processing_request_attempt_count_nonnegative'
+                      AND constraint_record.contype = 'c'
+                      AND table_record.relname = 'processing_requests'
+                      AND schema_record.nspname = current_schema()
+                ) THEN
+                    ALTER TABLE processing_requests
+                    ADD CONSTRAINT ck_processing_request_attempt_count_nonnegative
+                    CHECK (attempt_count >= 0);
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint constraint_record
+                    JOIN pg_class table_record
+                      ON table_record.oid = constraint_record.conrelid
+                    JOIN pg_namespace schema_record
+                      ON schema_record.oid = table_record.relnamespace
+                    WHERE constraint_record.conname = 'ck_processing_request_lease_shape'
+                      AND constraint_record.contype = 'c'
+                      AND table_record.relname = 'processing_requests'
+                      AND schema_record.nspname = current_schema()
+                ) THEN
+                    ALTER TABLE processing_requests
+                    ADD CONSTRAINT ck_processing_request_lease_shape CHECK (
+                        (
+                            processing_started_at IS NULL
+                            AND lease_expires_at IS NULL
+                        )
+                        OR (
+                            lease_expires_at IS NOT NULL
+                            AND (
+                                processing_started_at IS NOT NULL
+                                OR attempt_count = 0
+                            )
+                        )
+                    );
+                END IF;
+            END
+            $phase2$;
+            """
+        ))
 
 
 def _apply_processing_transcript_timing_schema(

@@ -1,4 +1,6 @@
+from datetime import UTC, datetime
 import logging
+import math
 import time
 
 from app.core.celery_app import celery_app
@@ -15,6 +17,15 @@ from app.processing.domain.models import (
 from app.processing.adapters.timing import log_processing_timing
 
 logger = logging.getLogger(__name__)
+
+
+def _lease_retry_delay_seconds(retry_at: datetime, *, now: datetime | None = None) -> int:
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    return max(1, math.ceil((retry_at - current).total_seconds()))
 
 
 @celery_app.task(name="process_video", bind=True)
@@ -37,7 +48,14 @@ def process_video_task(self, video_id: int, abs_video_path: str) -> dict:
         service.close()
 
 
-@celery_app.task(name="process_asset_object", bind=True)
+@celery_app.task(
+    name="process_asset_object",
+    bind=True,
+    acks_late=True,
+    acks_on_failure_or_timeout=True,
+    reject_on_worker_lost=True,
+    max_retries=None,
+)
 def process_asset_object_task(self, request: dict) -> dict:
     task_started_at = time.perf_counter()
     task_id = getattr(self.request, "id", None)
@@ -55,6 +73,15 @@ def process_asset_object_task(self, request: dict) -> dict:
     try:
         outcome = service.execute(command, task_id=task_id)
         if isinstance(outcome, ProcessingSkipped):
+            if outcome.status == "processing" and outcome.retry_at is not None:
+                retry_delay = _lease_retry_delay_seconds(outcome.retry_at)
+                logger.info(
+                    "deferring active processing lease redelivery event_id=%s asset_id=%s retry_in_seconds=%s",
+                    outcome.event_id,
+                    outcome.asset_id,
+                    retry_delay,
+                )
+                raise self.retry(countdown=retry_delay)
             result = {"status": outcome.status, "asset_id": outcome.asset_id, "duplicate": True}
         elif isinstance(outcome, ProcessingSucceeded):
             result = {

@@ -1,17 +1,29 @@
+from datetime import datetime
 from typing import Protocol
 
-from app.processing.domain.models import ProcessingExecutionCommand, ProcessingFailed, ProcessingSucceeded
+from app.processing.domain.models import (
+    ProcessingClaimConflict,
+    ProcessingExecutionCommand,
+    ProcessingFailed,
+    ProcessingLease,
+    ProcessingSucceeded,
+)
 
 
 class ProcessingArtifactStore(Protocol):
-    def claim(self, command: ProcessingExecutionCommand) -> str | None:
-        """Claim work and return the existing status when it cannot be claimed."""
+    def claim(
+        self,
+        command: ProcessingExecutionCommand,
+        *,
+        now: datetime,
+    ) -> ProcessingLease | ProcessingClaimConflict:
+        """Atomically acquire a lease or describe why the request cannot be claimed."""
         ...
 
-    def persist_success(self, outcome: ProcessingSucceeded) -> None:
+    def persist_success(self, outcome: ProcessingSucceeded, *, attempt_count: int) -> None:
         ...
 
-    def persist_failure(self, outcome: ProcessingFailed) -> None:
+    def persist_failure(self, outcome: ProcessingFailed, *, attempt_count: int) -> None:
         ...
 
     def commit(self) -> None:

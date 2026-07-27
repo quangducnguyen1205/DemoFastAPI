@@ -77,7 +77,15 @@ class Settings:
     # Celery / Redis
     CELERY_BROKER_URL: str = _env("CELERY_BROKER_URL", "redis://localhost:6379/0")
     CELERY_RESULT_BACKEND: str = _env("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
-    CELERY_WORKER_PREFETCH_MULTIPLIER: int = _env_int("CELERY_WORKER_PREFETCH_MULTIPLIER", 1)
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = _env_positive_int(
+        "CELERY_WORKER_PREFETCH_MULTIPLIER",
+        1,
+    )
+    PROCESSING_LEASE_SECONDS: int = _env_bounded_positive_int(
+        "PROCESSING_LEASE_SECONDS",
+        14_400,
+        604_800,
+    )
 
     # Kafka consumer configuration. The broker itself is owned outside this repo.
     KAFKA_BOOTSTRAP_SERVERS: str = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
