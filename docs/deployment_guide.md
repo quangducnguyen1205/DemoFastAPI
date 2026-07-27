@@ -27,6 +27,7 @@ docker compose up --build backend worker consumer db redis
 - `PROCESSING_LEASE_SECONDS` (default: `14400`, valid: `1..604800`)
 - `KAFKA_BOOTSTRAP_SERVERS`
 - `KAFKA_ASSET_PROCESSING_TOPIC` (default: `asset.processing.requested.v1`)
+- `KAFKA_ASSET_PROCESSING_V2_TOPIC` (default: `asset.processing.requested.v2`)
 - `KAFKA_PROCESSING_RESULT_TOPIC` (default: `asset.processing.result.v1`)
 - `KAFKA_CONSUMER_GROUP` (default: `fastapi-processing-v1`)
 - `KAFKA_RECONNECT_BACKOFF_SECONDS` (default: `5`)
@@ -48,6 +49,13 @@ docker compose up --build backend worker consumer db redis
 - `OBJECT_STORAGE_ACCESS_KEY_ID`
 - `OBJECT_STORAGE_SECRET_ACCESS_KEY`
 - `OBJECT_STORAGE_REGION`
+- `YOUTUBE_MAX_DURATION_SECONDS` (default: `7200`, valid: `1..86400`)
+- `YOUTUBE_MAX_FILE_SIZE_BYTES` (default: `1073741824`, valid:
+  `1..10737418240`)
+- `YOUTUBE_SOCKET_TIMEOUT_SECONDS` (default: `30`, valid: `1..300`)
+- `YOUTUBE_ACQUISITION_TIMEOUT_SECONDS` (default: `900`, valid: `1..7200` and
+  not less than the socket timeout)
+- `YOUTUBE_DOWNLOAD_RETRIES` (default: `2`, valid: `0..10`)
 
 Current Compose defaults align media storage at `/backend/media` inside the backend and worker containers.
 
@@ -87,14 +95,21 @@ curl http://localhost:8000/videos/<video_id>/transcript
 docker compose up --build consumer
 ```
 
-The consumer commits valid offsets only after successful Celery handoff. Invalid or unsupported messages are logged and committed to avoid blocking the partition because this phase has no DLQ. Processing remains at-least-once and idempotent by `eventId`.
+The same consumer group subscribes to `asset.processing.requested.v1` and the dormant
+`asset.processing.requested.v2` topic. Adding V2 does not change the V1 group or V1 task
+route, so it does not intentionally replay existing V1 offsets. The consumer commits valid
+offsets only after durable request creation and successful Celery handoff. Invalid,
+unsupported, or topic/version-mismatched messages are logged with safe identifiers and
+committed to avoid blocking the partition because this phase has no DLQ. Processing remains
+at-least-once and idempotent by `eventId`; conflicting V2 payload reuse under the same event
+ID is rejected and committed.
 
-The Kafka V1 object-storage task uses late acknowledgement,
+Both the Kafka V1 object-storage task and V2 YouTube task use late acknowledgement,
 `reject_on_worker_lost=true`, and prefetch multiplier `1`. A worker process loss therefore
 allows broker redelivery; the database lease remains the execution guard. Redelivery during
-an active lease skips MinIO/ffmpeg/Whisper and polls the database again after a bounded short
-countdown. A controlled processing exception is converted to one durable terminal `failed`
-result and returns normally, so it does not create an unbounded Celery retry loop.
+an active lease skips MinIO/yt-dlp/ffmpeg/Whisper and polls the database again after a bounded
+short countdown. A controlled processing exception is converted to one durable terminal
+`failed` V1 result and returns normally, so it does not create an unbounded Celery retry loop.
 
 The local `PROCESSING_LEASE_SECONDS=14400` default is intentionally conservative. Before adding
 Celery hard/soft task limits or using production-sized media, coordinate the lease with those
@@ -112,6 +127,35 @@ unacknowledged ETA repeatedly after visibility expires, and workers hold ETA mes
 The one-hour visibility default is deliberately not raised to four hours because a forced
 worker/host loss would then delay broker recovery for up to four hours. If applications share a
 Redis broker, keep the visibility settings aligned because the shortest configured value wins.
+
+## Dormant YouTube V2 runtime
+
+The container pins `yt-dlp[pin,pin-deno]==2026.7.4`. The matching pinned EJS component and
+Deno JavaScript runtime are installed through those extras; `ffmpeg` remains the existing
+system package. The worker invokes yt-dlp as `python -m yt_dlp` with an argument list and
+`shell=False`, disables playlists, plugins, remote components, cache, cookies, and browser
+cookie stores, and applies the configured socket timeout, total deadline, download retries,
+duration limit, and file-size limit.
+
+FastAPI accepts only a 1–64-character `[A-Za-z0-9_-]+` video ID and constructs the fixed
+canonical watch URL internally. Every attempt downloads into its own safely prefixed temporary
+directory with a fixed `media.%(ext)s` template. The selected output must be one non-empty,
+non-symlink file inside that directory. The directory is removed after success, controlled
+failure, timeout, or normal task cancellation, so YouTube media is not retained in MinIO,
+`backend/media`, or another FastAPI persistent store.
+
+Supported scope is one public finite video. Completed livestream recordings may pass only
+when yt-dlp reports a finite non-live item. Active/upcoming/post-live streams, playlists,
+private/deleted/age-restricted/region-blocked media, and authenticated/cookie access are
+controlled failures. Provider diagnostics are not returned. Stable result codes are
+`YOUTUBE_UNAVAILABLE`, `YOUTUBE_LIVE_NOT_SUPPORTED`,
+`YOUTUBE_DURATION_LIMIT_EXCEEDED`, `YOUTUBE_SIZE_LIMIT_EXCEEDED`,
+`YOUTUBE_ACQUISITION_TIMEOUT`, and `YOUTUBE_ACQUISITION_FAILED`.
+
+This V2 consumer is dormant after deployment: Spring does not publish V2 yet. Result
+publication remains `asset.processing.result.v1`; there is no V2 result topic. Public product
+creation, canonical submitted-URL normalization, authorization, and duplicate-product policy
+must be implemented in Spring before the topic is activated.
 
 ## Project3 cross-compose integration
 
@@ -137,8 +181,11 @@ Explicit indexing recovery, one-shot/manual relays, and exact-ID recovery remain
 Expected local startup order:
 
 1. Start Spring infrastructure first, including Kafka, MinIO, topic bootstrap, and bucket bootstrap.
-2. Start DemoFastAPI with both Compose files.
-3. Start the Spring application or run the manual smoke command.
+2. Build the updated DemoFastAPI image and start DemoFastAPI with both Compose files so its
+   advisory-locked schema upgrade and dual-topic consumer are ready.
+3. Start the Spring application or run the manual V1 smoke command.
+4. In a later cross-repository slice, deploy/enable the Spring V2 producer only after the
+   FastAPI V2 consumer is healthy. The current Spring application publishes no V2 event.
 
 The target renders both Compose files, starts `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay`, and passes `--no-build`. The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. DemoFastAPI `db` and `redis` stay on the normal local network.
 
@@ -209,13 +256,14 @@ Stuck `publishing` recovery after process interruption and a full Kafka DLQ/park
 The automatic relay publishes only due FastAPI processing-result outbox rows through the existing supported contracts: `transcript.ready` and `asset.processing.failed`. It is not a generic event relay and does not place transcript text, media bytes, object storage credentials, tokens, stack traces, or product ownership data in result payloads. P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the automatic relay with the Project3 overlay in the fully automatic Spring/FastAPI path: Spring automatic request relay, FastAPI consumer/Celery, FastAPI automatic result relay, and Spring automatic result listener completed one upload without manual request/result controls. Direct upload was not exercised; current Spring uses only the Kafka/outbox processing path. Indexing/search stayed disabled in that historical run.
 
 This repository does not use Alembic yet. Startup uses SQLAlchemy metadata for new databases and
-idempotent narrow schema upgrades for processing-request leases, processing-outbox recovery
-metadata, and nullable transcript timing on existing local databases. Legacy attempt counts
-become zero; non-processing lease timestamps remain null; legacy `processing` rows become
-immediately reclaimable without a fabricated start time. Pre-existing failed outbox rows become
-`unknown`, retain event identity, and are never automatically reconciled. Do not edit rows
-directly; investigate recovery-exhausted failures and use retained operator controls only after
-the publisher dependency is healthy.
+idempotent narrow schema upgrades for processing-request source shapes, processing leases,
+processing-outbox recovery metadata, and nullable transcript timing on existing local
+databases. Legacy request rows become `OBJECT_STORAGE`; their object references are retained.
+Legacy attempt counts become zero; non-processing lease timestamps remain null; legacy
+`processing` rows become immediately reclaimable without a fabricated start time. Pre-existing
+failed outbox rows become `unknown`, retain event identity, and are never automatically
+reconciled. Do not edit rows directly; investigate recovery-exhausted failures and use retained
+operator controls only after the publisher dependency is healthy.
 
 ## Runtime validation
 
@@ -224,7 +272,10 @@ python -m compileall backend/app
 docker compose config
 ```
 
-This repository intentionally avoids automated tests and a separate test image/runtime because the media and ML dependency stack is heavy for this personal project. Validate changes with runtime smoke checks, service logs, database inspection, and manual integration checks. This is a repository-specific trade-off, not a general backend recommendation.
+The normal unit suite mocks Kafka, MinIO, yt-dlp, and Whisper boundaries; it requires no live
+provider. Validate the image separately by importing the pinned yt-dlp package, then use
+controlled provider/runtime characterization only when outbound access and a public fixture
+are explicitly available.
 
 ## Branch-specific note
 

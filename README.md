@@ -14,7 +14,8 @@ frontend repositories.
 
 ## Active responsibility
 
-- consume `asset.processing.requested.v1` from Kafka for Spring-owned assets
+- consume object-storage `asset.processing.requested.v1` and dormant YouTube
+  `asset.processing.requested.v2` events from Kafka for Spring-owned assets
 - retain the deprecated direct-upload endpoint for generic standalone and legacy callers; the current Spring product core does not call it
 - enqueue and run transcription processing
 - persist processing state, direct-upload transcript rows, and Kafka-originated processing transcript artifacts
@@ -50,13 +51,46 @@ Kafka consumption is internal and does not add a public HTTP endpoint. The `/int
 ## Runtime services
 
 - `backend`: FastAPI API for upload/status/transcript endpoints
-- `consumer`: Kafka consumer for `asset.processing.requested.v1`
+- `consumer`: one Kafka consumer group subscribed to `asset.processing.requested.v1` and
+  `asset.processing.requested.v2`
 - `result-relay`: automatic relay in the Project3 topology and retained one-shot/manual relay in base Compose
 - `worker`: Celery worker for audio extraction, Whisper transcription, and transcript persistence
 - `db`: PostgreSQL for durable processing state and transcript rows
 - `redis`: Celery broker/result backend
 
-Direct-upload media files are stored under `backend/media/` by default in this branch. Kafka-originated processing uses Spring-provided MinIO/S3 object references and the Celery worker downloads bytes internally when processing starts.
+Direct-upload media files are stored under `backend/media/` by default in this branch.
+Kafka V1 processing uses Spring-provided MinIO/S3 object references. Kafka V2 processing
+accepts only a validated YouTube video ID, constructs the canonical watch URL inside the worker,
+and uses pinned `yt-dlp` in a task-owned temporary directory. YouTube media is removed after
+success, controlled failure, timeout, or normal context cancellation and is never retained in
+MinIO or FastAPI persistent storage.
+
+The dormant V2 request uses the existing envelope naming with exact event type
+`asset.processing.requested`, version `2`, aggregate metadata, and timestamps:
+
+```json
+{
+  "eventId": "processing-request-id",
+  "eventType": "asset.processing.requested",
+  "eventVersion": 2,
+  "aggregateType": "ASSET",
+  "aggregateId": "asset-id",
+  "occurredAt": "2026-07-27T00:00:00Z",
+  "payload": {
+    "assetId": "asset-id",
+    "workspaceId": "workspace-id",
+    "ownerId": "owner-id",
+    "sourceType": "YOUTUBE",
+    "youtubeVideoId": "abc_DEF-123",
+    "requestedAt": "2026-07-27T00:00:00Z"
+  }
+}
+```
+
+The V2 payload is strict: arbitrary URLs and object-storage fields are rejected. The video ID
+is bounded to 64 characters and permits only `A-Z`, `a-z`, `0-9`, `_`, and `-`. FastAPI does
+not enforce an exact 11-character shape because Spring has not yet frozen or implemented the
+canonical URL-normalization producer contract.
 
 Kafka-originated worker completion writes `processing_outbox_events` rows for internal result contracts:
 
@@ -136,7 +170,10 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
 - `GET /internal/processing-requests/{processingRequestId}/transcript-rows` returns Kafka-originated processing artifact rows ordered by `segment_index`, including nullable integer-millisecond `start_ms`/`end_ms`. Legacy artifacts return null timing. It returns `404` for unknown processing requests and `409` when a request is failed, not ready, or ready without usable transcript artifacts.
 - `owner_id` is still accepted on upload and returned on video reads for backward compatibility, but Repo A does not treat it as an authorization boundary.
 - Kafka delivery is at-least-once. The consumer is idempotent by `eventId` using the local `processing_requests` table and commits valid offsets after successful Celery handoff.
-- Kafka V1 object-storage workers claim `processing_requests` with a finite database lease.
+- The same consumer group subscribes to V1 and V2. Adding the V2 topic does not change the V1
+  group or task route, so it does not intentionally replay existing V1 offsets. Invalid or
+  unsupported V2 events are committed under the existing reject-and-continue policy.
+- Kafka V1 object-storage and V2 YouTube workers claim `processing_requests` with the same finite database lease.
   `processing_started_at` and `lease_expires_at` describe the current attempt;
   `attempt_count` is a non-negative fencing token. Active leases skip duplicate external work,
   expired leases are reclaimable, and terminal persistence clears the lease.
@@ -162,13 +199,26 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
 - P3-D4 `[ĐÃ SMOKE THỰC TẾ]` verified the fully automatic path: Spring `kafka_request` plus automatic request relay, FastAPI consumer/Celery processing from MinIO, FastAPI automatic result relay, and Spring automatic result listener. Direct upload was not exercised; current Spring uses only the Kafka/outbox processing path.
 - Stuck `publishing` recovery, generic all-event relay, production deployment hardening, retry topics, and a full Kafka DLQ remain future work. Direct upload remains standalone compatibility; manual relay remains an executable recovery path.
 - This repo still uses SQLAlchemy metadata rather than Alembic. Startup creates missing tables
-  and applies narrow idempotent upgrades for processing leases, processing-outbox recovery, and
-  processing-artifact timing; historical terminal failures are classified `unknown` instead of
-  being replayed.
-- This lease foundation currently protects only the existing object-storage Kafka V1 path.
-  YouTube V2/yt-dlp acquisition is not implemented. Lease expiry may permit duplicate external
-  transcription in extreme timing conditions, while attempt fencing and result idempotency
-  protect terminal product/result effects.
+  and applies advisory-lock-protected, narrow idempotent upgrades for processing source shapes,
+  processing leases, processing-outbox recovery, and processing-artifact timing. Existing
+  request rows are backfilled as `OBJECT_STORAGE`.
+- `processing_requests.source_type` is either `OBJECT_STORAGE` or `YOUTUBE`.
+  Object-storage rows retain their bucket/key/content metadata and no YouTube ID. YouTube rows
+  retain only `youtube_video_id`; all object-storage columns are null. Database constraints
+  reject mixed shapes, unsafe video IDs, negative object sizes, and invalid lease state.
+- YouTube V2 supports public finite single videos only. Playlists, active/upcoming live streams,
+  private/deleted/age-restricted/region-blocked media, cookies, authenticated sessions, and
+  arbitrary caller URLs are unsupported. Controlled failures use stable codes
+  `YOUTUBE_UNAVAILABLE`, `YOUTUBE_LIVE_NOT_SUPPORTED`,
+  `YOUTUBE_DURATION_LIMIT_EXCEEDED`, `YOUTUBE_SIZE_LIMIT_EXCEEDED`,
+  `YOUTUBE_ACQUISITION_TIMEOUT`, or `YOUTUBE_ACQUISITION_FAILED`.
+- The V2 consumer is implemented but dormant: Spring does not publish
+  `asset.processing.requested.v2` yet. Public YouTube product creation, canonical URL
+  normalization, authorization, and duplicate-product policy are not owned by this repository
+  or slice. Result events remain the unchanged V1 contract.
+- Lease expiry may permit duplicate external acquisition/transcription in extreme timing
+  conditions, while attempt fencing and result-outbox idempotency protect terminal
+  product/result effects.
 
 ## Documentation
 

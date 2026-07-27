@@ -32,10 +32,15 @@ artifacts, failures, success/failure outcomes, and the explicit idempotent-skip 
 models contain no Kafka records, FastAPI request/response types, Celery tasks, SQLAlchemy
 models, or Whisper transport values.
 
-The Kafka adapter validates the unchanged `asset.processing.requested` version 1 envelope
-and maps it to `ProcessingRequestCommand`. `DispatchProcessingApplicationService` uses a
-processing-request repository and `ProcessingTaskDispatcher`. The Celery dispatcher retains
-the deterministic `asset-processing-{eventId}` task id and exact object-reference payload.
+The Kafka adapter still validates the unchanged `asset.processing.requested` version 1
+envelope and maps it to the explicit object-storage `ProcessingRequestCommand`. It also
+subscribes, with the same consumer group, to dormant topic
+`asset.processing.requested.v2`. An exact version 2 event with `sourceType=YOUTUBE` maps to
+the separate `YouTubeProcessingRequestCommand`; arbitrary URLs, object-storage fields, extra
+payload fields, and unsafe video IDs are rejected. `DispatchProcessingApplicationService`
+uses the same processing-request repository and source-aware `ProcessingTaskDispatcher`.
+The V1 Celery dispatcher retains the deterministic `asset-processing-{eventId}` task id and
+exact object-reference payload.
 
 `process_asset_object` remains the registered Celery task name, but the task now only maps
 the payload, invokes `ExecuteProcessingApplicationService`, and maps its neutral result back
@@ -43,6 +48,12 @@ to the existing Celery result dictionary. The use case reads linearly: claim pro
 acquire the referenced object, transcribe/chunk it, construct ordered transcript rows, persist
 the artifact, record one terminal outcome, and commit. Provider, media, artifact, and durable
 result adapters stay at the edge.
+
+`process_youtube_asset` is a separate registered task with a payload containing only event,
+asset, workspace, owner, and validated YouTube video IDs. It invokes the same execution use
+case, lease store, Whisper adapter, transcript artifact store, and result recorder. It differs
+only at the media-source adapter. No generic provider registry or nullable command bag was
+introduced.
 
 The claim transition is still committed before external media/provider work, but it is now a
 finite execution lease. Successful request status, transcript artifact rows, and result intent
@@ -71,8 +82,8 @@ in one transaction. The result outbox uniqueness contract remains unchanged.
 
 `PROCESSING_LEASE_SECONDS` is finite, validated from 1 through 604800 seconds, and defaults to
 14400 seconds (four hours) for conservative local Whisper execution. Operators must coordinate
-it with any future Celery task limits and measured media-size/Whisper throughput. The current
-worker uses one-message prefetch for the long-running task, late acknowledgement, and
+it with any future Celery task limits and measured media-size/Whisper throughput. Both
+object-storage and YouTube tasks use one-message prefetch, late acknowledgement, and
 worker-lost rejection/requeue.
 
 Redis transport keeps its one-hour visibility timeout explicit through
@@ -90,13 +101,64 @@ one successor, and the chain stops at reclaim or any terminal state. A numeric C
 limit could strand a request after enough worker losses; terminal controlled failures instead
 return normally and are acknowledged. Repeated independent broker deliveries may each create
 one short polling chain, but this design has no branching retry amplification. The existing
-database claim and attempt fence still prevent MinIO/ffmpeg/Whisper work while a lease is
-active.
+database claim and attempt fence still prevent MinIO/yt-dlp/ffmpeg/Whisper work while a lease
+is active. Lease expiry can permit duplicate external execution if an original attempt
+outlives the configured duration, but the attempt fence and result-outbox idempotency protect
+the canonical product/result effects.
 
-This foundation protects only the existing Kafka V1 object-storage path. YouTube V2 acquisition,
-its payload/source model, and yt-dlp are not implemented. Lease expiry can permit duplicate
-external execution if an original attempt outlives the configured duration, but the attempt
-fence and result-outbox idempotency protect the canonical product/result effects.
+## Source-shaped processing integration state
+
+`processing_requests.source_type` is non-null and constrained to one of two complete shapes:
+
+- `OBJECT_STORAGE` has no `youtube_video_id` and requires bucket, object key, content type,
+  and non-negative size. Existing rows are backfilled to this source.
+- `YOUTUBE` requires a 1–64-character `[A-Za-z0-9_-]+` video ID and requires all object
+  storage columns, including original filename, to be null.
+
+Fresh schema creation uses SQLAlchemy metadata. Existing PostgreSQL tables receive the new
+columns, backfill, nullability changes, and stable named constraints inside the existing
+session advisory lock. Constraint-existence checks are scoped to the current schema and the
+real `processing_requests` table. The narrow SQLite upgrader used by tests/local compatibility
+is also idempotent. Lease columns, attempt fencing, event uniqueness, transcript relations,
+and result-outbox behavior are retained.
+
+## Temporary YouTube acquisition
+
+`YouTubeProcessingMediaSource` receives only the validated video ID and constructs
+`https://www.youtube.com/watch?v={youtubeVideoId}` internally. It runs the explicitly pinned
+`yt-dlp[pin,pin-deno]==2026.7.4` module through an argument-list subprocess with `shell=False`.
+The subprocess strategy was selected over the embedding API to provide a hard wall-clock
+deadline, process-group termination on worker cancellation/timeout, and a directory-size
+guard without sharing provider-global state. The pinned extras include the matching local EJS
+component and Deno runtime required by current YouTube extraction; remote components and
+plugins are disabled.
+
+Every attempt owns a `TemporaryDirectory` whose prefix is derived from hashed internal event
+and asset IDs. The output template is fixed as `media.%(ext)s`; provider titles never become
+paths. Playlists, cookies, browser cookie stores, cache, arbitrary URLs, and caller-controlled
+templates are disabled. Metadata is checked before download for exact ID, finite duration,
+live state, and known size. The final regular, non-symlink file must remain inside the owned
+directory, be the single unambiguous output, and satisfy the size limit. Directory context
+cleanup removes media, `.part`, metadata, and other temporary files after success, controlled
+failure, timeout, or normal cancellation.
+
+Defaults are two bounded retries for every yt-dlp retry category, a 30-second socket timeout,
+a 900-second total acquisition deadline, a two-hour duration limit, and a 1 GiB file limit.
+Public finite single videos and completed recordings that behave as finite videos are
+supported. Active/upcoming/post-live streams are rejected. Private, deleted, age-restricted,
+region-blocked, and authenticated/cookie-only media are unsupported.
+
+Provider output is never copied into a result. Controlled failures map to stable codes:
+`YOUTUBE_UNAVAILABLE`, `YOUTUBE_LIVE_NOT_SUPPORTED`,
+`YOUTUBE_DURATION_LIMIT_EXCEEDED`, `YOUTUBE_SIZE_LIMIT_EXCEEDED`,
+`YOUTUBE_ACQUISITION_TIMEOUT`, and `YOUTUBE_ACQUISITION_FAILED`. Each records one terminal
+failed V1 result and returns normally from Celery; worker/process loss remains a lease and
+broker-redelivery concern.
+
+The V2 path is deployed dormant because Spring has no V2 producer yet. FastAPI does not own
+public YouTube product creation, URL normalization, authorization, or duplicate-product
+policy. Acquired media is temporary and not retained. Successful and failed outcomes continue
+to use `asset.processing.result.v1` and the existing V1 envelope/payload.
 
 ## Direct-upload compatibility
 
@@ -164,8 +226,8 @@ The stable external import/command paths remain `app.main:app`,
 `python -m app.relays.processing_outbox_relay`, and
 `python -m app.relays.processing_outbox_auto_relay`. They are thin adapters only. Settings
 remain in the existing flat `Settings` object because splitting it would add forwarding
-configuration without changing ownership; every environment-variable name and default is
-unchanged.
+configuration without changing ownership. Existing environment names/defaults are unchanged;
+the dormant V2 topic and bounded YouTube acquisition settings are additive.
 
 The obsolete `processing.composition`, `services.processing_requests`, result-outbox service
 wrappers, task-owned processing algorithm, and SQLAlchemy transcript helper were removed only
@@ -174,7 +236,9 @@ after repository-wide import-string and command searches showed no remaining cal
 ## Remaining FastAPI debt
 
 - There is no crash-age policy for abandoned `publishing` rows.
-- YouTube V2 acquisition and temporary yt-dlp media handling are not implemented.
+- Spring does not yet publish the dormant V2 request contract.
+- Public YouTube product creation, duplicate policy, authorized retry API, and frontend source
+  entry remain outside this repository.
 - SQLAlchemy metadata plus the existing narrow schema upgrader remain in place instead of
   Alembic migrations.
 - Kafka rejection still commits malformed/unsupported events without a DLQ.

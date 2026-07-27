@@ -46,7 +46,26 @@ task limits plus observed Whisper throughput. Active-lease delivery uses bounded
 polls instead of a four-hour ETA; every poll is validated below the explicit 3600-second Redis
 visibility timeout and produces at most one successor. The database status/expiry check, not
 Redis scheduling, remains the execution guard. YouTube V2 and yt-dlp acquisition are not part
-of this foundation.
+of the V1 command contract.
+
+### Dormant Kafka YouTube flow
+
+1. A future Spring producer publishes an exact `asset.processing.requested` version 2 event to
+   `asset.processing.requested.v2` with `sourceType=YOUTUBE` and a validated video ID.
+2. The same Repo A consumer group validates the strict V2 payload, writes a source-shaped
+   `processing_requests` row keyed by `eventId`, and dispatches `process_youtube_asset`.
+3. The task acquires the same database lease as V1. An active lease performs no yt-dlp,
+   ffmpeg, or Whisper work; an expired lease is reclaimable as a new fenced attempt.
+4. `YouTubeProcessingMediaSource` constructs the canonical watch URL internally and downloads
+   one public finite video into a task-owned temporary directory with bounded retries, socket
+   timeout, overall timeout, duration, and file-size limits.
+5. The existing ffmpeg/Whisper/timing/artifact pipeline runs on the temporary media path.
+   Cleanup removes the downloaded file on exit.
+6. Success or controlled failure stores the unchanged result V1 outbox intent.
+
+The V2 path is implemented but dormant because Spring does not publish it yet. It does not
+add a public endpoint, retain YouTube media, accept arbitrary URLs/cookies, or own product
+creation and duplicate policy.
 
 ## Persistence boundary
 

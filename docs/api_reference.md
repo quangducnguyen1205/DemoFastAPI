@@ -2,7 +2,10 @@
 
 This branch exposes only the processing-service contract that Repo B needs.
 
-Kafka consumption is internal to FastAPI and does not add a public HTTP API. The consumer reads `asset.processing.requested.v1`, validates the envelope, records idempotency by `eventId`, and hands object-reference metadata to Celery.
+Kafka consumption is internal to FastAPI and does not add a public HTTP API. The same
+consumer group reads object-storage `asset.processing.requested.v1` and dormant YouTube
+`asset.processing.requested.v2`, validates each exact envelope, records idempotency by
+`eventId`, and dispatches the source-specific Celery task.
 
 ## Base URL
 
@@ -162,12 +165,35 @@ Production-grade service-to-service authentication and network policy are not im
 
 ## Internal Kafka intake
 
-- Topic: `asset.processing.requested.v1`
+- Topics: `asset.processing.requested.v1` and dormant
+  `asset.processing.requested.v2`
 - Consumer group: `fastapi-processing-v1`
 - Delivery model: at-least-once
 - Idempotency key: `eventId`
-- Payload boundary: MinIO/S3 bucket and object key references only, never raw media bytes
+- V1 payload boundary: unchanged MinIO/S3 bucket and object key references, never raw media
+  bytes
+- V2 payload boundary: asset/workspace/owner IDs, exact `sourceType=YOUTUBE`, validated
+  YouTube video ID, and request timestamp only; arbitrary URLs and object references are
+  rejected
 - Processing artifacts: transcript segment rows are stored internally by processing request for later completion-event work
+
+V2 retains the V1 envelope field names and uses exact `eventType=asset.processing.requested`
+and `eventVersion=2`. Its strict payload is:
+
+```json
+{
+  "assetId": "asset-id",
+  "workspaceId": "workspace-id",
+  "ownerId": "owner-id",
+  "sourceType": "YOUTUBE",
+  "youtubeVideoId": "abc_DEF-123",
+  "requestedAt": "2026-07-27T00:00:00Z"
+}
+```
+
+The video ID is 1–64 characters from `[A-Za-z0-9_-]`. FastAPI constructs the canonical URL
+internally. The V2 consumer is dormant until Spring implements a producer; it creates no
+public YouTube API. Success and failure still emit only result V1.
 
 ## Internal result outbox contracts
 
