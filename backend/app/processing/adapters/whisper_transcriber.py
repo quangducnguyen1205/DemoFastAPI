@@ -4,7 +4,10 @@ import time
 from numbers import Real
 from typing import Any
 
-from app.processing.domain.models import ProcessingExecutionCommand, ProcessingTranscriptRow
+from app.processing.domain.models import (
+    ProcessingExecutionCommandLike,
+    ProcessingTranscriptRow,
+)
 from app.services.video_processing import extract_audio_to_wav, segment_text, transcribe_audio_with_whisper
 from app.processing.adapters.timing import log_processing_timing
 
@@ -58,7 +61,7 @@ class WhisperProcessingTranscriptionProvider:
         self,
         media_path: str,
         *,
-        command: ProcessingExecutionCommand | None = None,
+        command: ProcessingExecutionCommandLike | None = None,
         task_id: str | None = None,
         video_id: int | None = None,
     ) -> tuple[ProcessingTranscriptRow, ...]:

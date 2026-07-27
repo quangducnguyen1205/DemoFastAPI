@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -10,10 +11,13 @@ from app import models as _models  # noqa: F401
 from app.config.settings import settings
 from app.core.database import SessionLocal
 from app.events.asset_processing import EventValidationError, parse_asset_processing_requested_event
+from app.events.asset_processing_v2 import parse_youtube_asset_processing_requested_event
+from app.processing.domain.models import ConflictingProcessingRequestError
 from app.processing.application.dispatch import ProcessingAcceptance
 from app.bootstrap.consumer import build_processing_dispatch_service
 
 logger = logging.getLogger(__name__)
+_SAFE_LOG_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 @dataclass(frozen=True)
@@ -39,30 +43,81 @@ def _decode_event_context(raw_value: bytes | str | dict) -> dict[str, Any]:
 
     payload = event.get("payload")
     payload = payload if isinstance(payload, dict) else {}
+
+    def safe_id(value):
+        return (
+            value
+            if isinstance(value, str) and _SAFE_LOG_ID_PATTERN.fullmatch(value)
+            else None
+        )
+
+    event_version = event.get("eventVersion")
     return {
-        "eventId": event.get("eventId"),
-        "eventType": event.get("eventType"),
-        "eventVersion": event.get("eventVersion"),
-        "aggregateId": event.get("aggregateId"),
-        "assetId": payload.get("assetId"),
-        "objectKey": payload.get("objectKey"),
+        "eventId": safe_id(event.get("eventId")),
+        "eventVersion": event_version if isinstance(event_version, int) else None,
+        "aggregateId": safe_id(event.get("aggregateId")),
+        "assetId": safe_id(payload.get("assetId")),
     }
 
 
-def handle_asset_processing_message(raw_value: bytes | str | dict, db: Session) -> MessageHandlingResult:
+def _parse_processing_event(
+    raw_value: bytes | str | dict,
+    *,
+    topic: str | None,
+):
+    if topic == settings.KAFKA_ASSET_PROCESSING_TOPIC:
+        return parse_asset_processing_requested_event(raw_value)
+    if topic == settings.KAFKA_ASSET_PROCESSING_V2_TOPIC:
+        return parse_youtube_asset_processing_requested_event(raw_value)
+    if topic is not None:
+        raise EventValidationError(f"unsupported processing topic '{topic}'")
+
+    context = _decode_event_context(raw_value)
+    if context.get("eventVersion") == 1:
+        return parse_asset_processing_requested_event(raw_value)
+    if context.get("eventVersion") == 2:
+        return parse_youtube_asset_processing_requested_event(raw_value)
+    raise EventValidationError(
+        f"unsupported eventVersion '{context.get('eventVersion')}'"
+    )
+
+
+def handle_asset_processing_message(
+    raw_value: bytes | str | dict,
+    db: Session,
+    topic: str | None = None,
+) -> MessageHandlingResult:
     try:
-        event = parse_asset_processing_requested_event(raw_value)
-    except EventValidationError as exc:
+        event = _parse_processing_event(raw_value, topic=topic)
+    except EventValidationError:
         logger.warning(
-            "rejecting asset processing event context=%s reason=%s",
+            "rejecting asset processing event context=%s reason=validation_failed",
+            _decode_event_context(raw_value),
+        )
+        return MessageHandlingResult(
+            accepted=False,
+            duplicate=False,
+            rejected=True,
+            reason="event validation failed",
+        )
+
+    try:
+        acceptance: ProcessingAcceptance = build_processing_dispatch_service(db).dispatch(
+            event.to_processing_command()
+        )
+    except ConflictingProcessingRequestError as exc:
+        logger.warning(
+            "rejecting conflicting processing event context=%s reason=%s",
             _decode_event_context(raw_value),
             exc,
         )
-        return MessageHandlingResult(accepted=False, duplicate=False, rejected=True, reason=str(exc))
-
-    acceptance: ProcessingAcceptance = build_processing_dispatch_service(db).dispatch(
-        event.to_processing_command()
-    )
+        return MessageHandlingResult(
+            accepted=False,
+            duplicate=False,
+            rejected=True,
+            event_id=getattr(event, "eventId", None),
+            reason=str(exc),
+        )
     return MessageHandlingResult(
         accepted=acceptance.accepted,
         duplicate=acceptance.duplicate,
@@ -84,6 +139,7 @@ class AssetProcessingKafkaConsumer:
 
         return KafkaConsumer(
             settings.KAFKA_ASSET_PROCESSING_TOPIC,
+            settings.KAFKA_ASSET_PROCESSING_V2_TOPIC,
             bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS_LIST,
             group_id=settings.KAFKA_CONSUMER_GROUP,
             enable_auto_commit=False,
@@ -93,8 +149,9 @@ class AssetProcessingKafkaConsumer:
 
     def run_forever(self) -> None:
         logger.info(
-            "starting asset processing Kafka consumer topic=%s group=%s bootstrap=%s",
+            "starting asset processing Kafka consumer topics=%s,%s group=%s bootstrap=%s",
             settings.KAFKA_ASSET_PROCESSING_TOPIC,
+            settings.KAFKA_ASSET_PROCESSING_V2_TOPIC,
             settings.KAFKA_CONSUMER_GROUP,
             settings.KAFKA_BOOTSTRAP_SERVERS,
         )
@@ -109,7 +166,11 @@ class AssetProcessingKafkaConsumer:
 
                     db = SessionLocal()
                     try:
-                        result = handle_asset_processing_message(message.value, db)
+                        result = handle_asset_processing_message(
+                            message.value,
+                            db,
+                            getattr(message, "topic", None),
+                        )
                         if result.rejected:
                             logger.warning(
                                 "committing rejected event offset to avoid blocking the partition reason=%s",

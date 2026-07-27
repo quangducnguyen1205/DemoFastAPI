@@ -10,3 +10,4 @@ celery
 redis==6.4.0
 kafka-python==2.3.1
 boto3
+yt-dlp[pin,pin-deno]==2026.7.4

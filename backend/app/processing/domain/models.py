@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TypeAlias
 
+OBJECT_STORAGE_SOURCE_TYPE = "OBJECT_STORAGE"
+YOUTUBE_SOURCE_TYPE = "YOUTUBE"
+
 
 @dataclass(frozen=True)
 class ProcessingRequestCommand:
@@ -46,6 +49,51 @@ class ProcessingExecutionCommand:
     original_filename: str | None
     content_type: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class YouTubeProcessingRequestCommand:
+    event_id: str
+    event_type: str
+    event_version: int
+    aggregate_type: str
+    aggregate_id: str
+    occurred_at: str
+    asset_id: str
+    workspace_id: str | None
+    owner_id: str | None
+    youtube_video_id: str
+    requested_at: str | None
+
+    def to_execution_command(self) -> "YouTubeProcessingExecutionCommand":
+        return YouTubeProcessingExecutionCommand(
+            event_id=self.event_id,
+            asset_id=self.asset_id,
+            workspace_id=self.workspace_id,
+            owner_id=self.owner_id,
+            youtube_video_id=self.youtube_video_id,
+        )
+
+
+@dataclass(frozen=True)
+class YouTubeProcessingExecutionCommand:
+    event_id: str
+    asset_id: str
+    workspace_id: str | None
+    owner_id: str | None
+    youtube_video_id: str
+
+
+ProcessingRequestCommandLike: TypeAlias = (
+    ProcessingRequestCommand | YouTubeProcessingRequestCommand
+)
+ProcessingExecutionCommandLike: TypeAlias = (
+    ProcessingExecutionCommand | YouTubeProcessingExecutionCommand
+)
+
+
+class ConflictingProcessingRequestError(ValueError):
+    """Raised when one event ID is reused for a different processing request."""
 
 
 @dataclass(frozen=True)

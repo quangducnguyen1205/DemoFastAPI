@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 import logging
 
-from app.processing.domain.models import ProcessingRequestCommand
+from app.processing.domain.models import (
+    ProcessingRequestCommandLike,
+    YOUTUBE_SOURCE_TYPE,
+)
 from app.processing.ports.request_repository import ProcessingRequestRepository
 from app.processing.ports.task_dispatcher import ProcessingTaskDispatcher
 
@@ -28,7 +31,7 @@ class DispatchProcessingApplicationService:
         self._repository = repository
         self._dispatcher = dispatcher
 
-    def dispatch(self, command: ProcessingRequestCommand) -> ProcessingAcceptance:
+    def dispatch(self, command: ProcessingRequestCommandLike) -> ProcessingAcceptance:
         request = self._repository.get_or_create(command)
         if request.status in {"enqueued", "processing", "ready", "failed"}:
             logger.info(
@@ -49,14 +52,23 @@ class DispatchProcessingApplicationService:
 
         dispatched = self._dispatcher.dispatch(command.to_execution_command())
         request = self._repository.mark_enqueued(command.event_id, dispatched.task_id)
-        logger.info(
-            "asset processing event accepted event_id=%s asset_id=%s bucket=%s object_key=%s task_id=%s",
-            request.event_id,
-            request.asset_id,
-            request.storage_bucket,
-            request.object_key,
-            request.task_id,
-        )
+        if request.source_type == YOUTUBE_SOURCE_TYPE:
+            logger.info(
+                "YouTube processing event accepted event_id=%s asset_id=%s version=%s task_id=%s",
+                request.event_id,
+                request.asset_id,
+                command.event_version,
+                request.task_id,
+            )
+        else:
+            logger.info(
+                "asset processing event accepted event_id=%s asset_id=%s bucket=%s object_key=%s task_id=%s",
+                request.event_id,
+                request.asset_id,
+                request.storage_bucket,
+                request.object_key,
+                request.task_id,
+            )
         return ProcessingAcceptance(
             event_id=request.event_id,
             asset_id=request.asset_id,

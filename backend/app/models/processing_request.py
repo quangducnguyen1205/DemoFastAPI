@@ -24,11 +24,19 @@ class ProcessingRequest(Base):
     asset_id = Column(String(64), nullable=False, index=True)
     workspace_id = Column(String(64), nullable=True, index=True)
     owner_id = Column(String(255), nullable=True)
-    storage_bucket = Column(String(255), nullable=False)
-    object_key = Column(String(1024), nullable=False)
+    source_type = Column(
+        String(32),
+        nullable=False,
+        default="OBJECT_STORAGE",
+        server_default="OBJECT_STORAGE",
+        index=True,
+    )
+    youtube_video_id = Column(String(64), nullable=True)
+    storage_bucket = Column(String(255), nullable=True)
+    object_key = Column(String(1024), nullable=True)
     original_filename = Column(String(500), nullable=True)
-    content_type = Column(String(255), nullable=False)
-    size_bytes = Column(BigInteger, nullable=False)
+    content_type = Column(String(255), nullable=True)
+    size_bytes = Column(BigInteger, nullable=True)
     celery_task_id = Column(String(255), nullable=True, index=True)
     status = Column(String(50), nullable=False, default="accepted", index=True)
     segment_count = Column(Integer, nullable=True)
@@ -52,6 +60,40 @@ class ProcessingRequest(Base):
             "(processing_started_at IS NOT NULL OR attempt_count = 0))",
             name="ck_processing_request_lease_shape",
         ),
+        CheckConstraint(
+            "("
+            "source_type = 'OBJECT_STORAGE' "
+            "AND youtube_video_id IS NULL "
+            "AND storage_bucket IS NOT NULL "
+            "AND object_key IS NOT NULL "
+            "AND content_type IS NOT NULL "
+            "AND size_bytes IS NOT NULL "
+            "AND size_bytes >= 0"
+            ") OR ("
+            "source_type = 'YOUTUBE' "
+            "AND youtube_video_id IS NOT NULL "
+            "AND storage_bucket IS NULL "
+            "AND object_key IS NULL "
+            "AND original_filename IS NULL "
+            "AND content_type IS NULL "
+            "AND size_bytes IS NULL"
+            ")",
+            name="ck_processing_request_source_shape",
+        ),
+        CheckConstraint(
+            "youtube_video_id IS NULL OR ("
+            "length(youtube_video_id) BETWEEN 1 AND 64 "
+            "AND youtube_video_id ~ '^[A-Za-z0-9_-]+$'"
+            ")",
+            name="ck_processing_request_youtube_video_id",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "youtube_video_id IS NULL OR ("
+            "length(youtube_video_id) BETWEEN 1 AND 64 "
+            "AND youtube_video_id NOT GLOB '*[^A-Za-z0-9_-]*'"
+            ")",
+            name="ck_processing_request_youtube_video_id",
+        ).ddl_if(dialect="sqlite"),
     )
 
     transcripts = relationship(

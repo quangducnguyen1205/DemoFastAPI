@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.processing.domain.models import ProcessingExecutionCommand
+from app.processing.domain.models import ProcessingExecutionCommandLike
 
 
 @dataclass(frozen=True)
@@ -10,5 +10,5 @@ class ProcessingDispatch:
 
 
 class ProcessingTaskDispatcher(Protocol):
-    def dispatch(self, command: ProcessingExecutionCommand) -> ProcessingDispatch:
+    def dispatch(self, command: ProcessingExecutionCommandLike) -> ProcessingDispatch:
         ...

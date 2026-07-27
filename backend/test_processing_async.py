@@ -85,6 +85,15 @@ class ProcessingSettingsTest(unittest.TestCase):
         self.assertEqual(settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS, 3_600)
         self.assertEqual(settings.PROCESSING_LEASE_RETRY_POLL_SECONDS, 300)
         self.assertEqual(settings.PROCESSING_LEASE_SECONDS, 14_400)
+        self.assertEqual(
+            settings.KAFKA_ASSET_PROCESSING_V2_TOPIC,
+            "asset.processing.requested.v2",
+        )
+        self.assertEqual(settings.YOUTUBE_MAX_DURATION_SECONDS, 7_200)
+        self.assertEqual(settings.YOUTUBE_MAX_FILE_SIZE_BYTES, 1_073_741_824)
+        self.assertEqual(settings.YOUTUBE_SOCKET_TIMEOUT_SECONDS, 30)
+        self.assertEqual(settings.YOUTUBE_ACQUISITION_TIMEOUT_SECONDS, 900)
+        self.assertEqual(settings.YOUTUBE_DOWNLOAD_RETRIES, 2)
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_INTERVAL_SECONDS, 30)
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS, 60)
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE, 50)
@@ -131,6 +140,24 @@ class ProcessingSettingsTest(unittest.TestCase):
             },
             {"PROCESSING_LEASE_SECONDS": "0"},
             {"PROCESSING_LEASE_SECONDS": "604801"},
+            {
+                "KAFKA_ASSET_PROCESSING_TOPIC": "same-topic",
+                "KAFKA_ASSET_PROCESSING_V2_TOPIC": "same-topic",
+            },
+            {"YOUTUBE_MAX_DURATION_SECONDS": "0"},
+            {"YOUTUBE_MAX_DURATION_SECONDS": "86401"},
+            {"YOUTUBE_MAX_FILE_SIZE_BYTES": "0"},
+            {"YOUTUBE_MAX_FILE_SIZE_BYTES": "10737418241"},
+            {"YOUTUBE_SOCKET_TIMEOUT_SECONDS": "0"},
+            {"YOUTUBE_SOCKET_TIMEOUT_SECONDS": "301"},
+            {"YOUTUBE_ACQUISITION_TIMEOUT_SECONDS": "0"},
+            {"YOUTUBE_ACQUISITION_TIMEOUT_SECONDS": "7201"},
+            {"YOUTUBE_DOWNLOAD_RETRIES": "-1"},
+            {"YOUTUBE_DOWNLOAD_RETRIES": "11"},
+            {
+                "YOUTUBE_SOCKET_TIMEOUT_SECONDS": "60",
+                "YOUTUBE_ACQUISITION_TIMEOUT_SECONDS": "30",
+            },
         ):
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):
                 self._load_settings(overrides)

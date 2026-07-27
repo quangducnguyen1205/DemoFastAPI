@@ -3,7 +3,9 @@ import signal
 
 from app.config.settings import settings
 from app.core.schema import initialize_database_schema
-from app.processing.adapters.celery_dispatcher import CeleryProcessingTaskDispatcher
+from app.processing.adapters.celery_dispatcher import (
+    SourceAwareCeleryProcessingTaskDispatcher,
+)
 from app.processing.adapters.sqlalchemy_stores import SqlAlchemyProcessingRequestRepository
 from app.processing.application.dispatch import DispatchProcessingApplicationService
 
@@ -11,7 +13,7 @@ from app.processing.application.dispatch import DispatchProcessingApplicationSer
 def build_processing_dispatch_service(db, *, dispatcher=None) -> DispatchProcessingApplicationService:
     return DispatchProcessingApplicationService(
         repository=SqlAlchemyProcessingRequestRepository(db),
-        dispatcher=dispatcher or CeleryProcessingTaskDispatcher(),
+        dispatcher=dispatcher or SourceAwareCeleryProcessingTaskDispatcher(),
     )
 
 

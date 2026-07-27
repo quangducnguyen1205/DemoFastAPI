@@ -7,11 +7,15 @@ from sqlalchemy.orm import Session
 from app import models
 from app.processing.domain.models import (
     ProcessingClaimConflict,
+    ConflictingProcessingRequestError,
+    OBJECT_STORAGE_SOURCE_TYPE,
     ProcessingFailed,
     ProcessingLease,
     ProcessingLeaseLost,
     ProcessingRequestCommand,
     ProcessingSucceeded,
+    YOUTUBE_SOURCE_TYPE,
+    YouTubeProcessingRequestCommand,
 )
 from app.processing.ports.request_repository import ProcessingRequestState
 
@@ -24,6 +28,8 @@ def _request_state(request: models.ProcessingRequest) -> ProcessingRequestState:
         task_id=request.celery_task_id,
         storage_bucket=request.storage_bucket,
         object_key=request.object_key,
+        source_type=request.source_type,
+        youtube_video_id=request.youtube_video_id,
     )
 
 
@@ -31,27 +37,48 @@ class SqlAlchemyProcessingRequestRepository:
     def __init__(self, db: Session) -> None:
         self._db = db
 
-    def get_or_create(self, command: ProcessingRequestCommand) -> ProcessingRequestState:
+    def get_or_create(
+        self,
+        command: ProcessingRequestCommand | YouTubeProcessingRequestCommand,
+    ) -> ProcessingRequestState:
         existing = self._db.query(models.ProcessingRequest).filter(
             models.ProcessingRequest.event_id == command.event_id,
         ).first()
         if existing:
+            self._assert_compatible_duplicate(existing, command)
             return _request_state(existing)
 
-        request = models.ProcessingRequest(
-            event_id=command.event_id,
-            asset_id=command.asset_id,
-            workspace_id=command.workspace_id,
-            owner_id=command.owner_id,
-            storage_bucket=command.storage_bucket,
-            object_key=command.object_key,
-            original_filename=command.original_filename,
-            content_type=command.content_type,
-            size_bytes=command.size_bytes,
-            status="accepted",
-            occurred_at=command.occurred_at,
-            requested_at=command.requested_at,
-        )
+        common_fields = {
+            "event_id": command.event_id,
+            "asset_id": command.asset_id,
+            "workspace_id": command.workspace_id,
+            "owner_id": command.owner_id,
+            "status": "accepted",
+            "occurred_at": command.occurred_at,
+            "requested_at": command.requested_at,
+        }
+        if isinstance(command, YouTubeProcessingRequestCommand):
+            request = models.ProcessingRequest(
+                **common_fields,
+                source_type=YOUTUBE_SOURCE_TYPE,
+                youtube_video_id=command.youtube_video_id,
+                storage_bucket=None,
+                object_key=None,
+                original_filename=None,
+                content_type=None,
+                size_bytes=None,
+            )
+        else:
+            request = models.ProcessingRequest(
+                **common_fields,
+                source_type=OBJECT_STORAGE_SOURCE_TYPE,
+                youtube_video_id=None,
+                storage_bucket=command.storage_bucket,
+                object_key=command.object_key,
+                original_filename=command.original_filename,
+                content_type=command.content_type,
+                size_bytes=command.size_bytes,
+            )
         self._db.add(request)
         try:
             self._db.commit()
@@ -62,7 +89,33 @@ class SqlAlchemyProcessingRequestRepository:
             existing = self._db.query(models.ProcessingRequest).filter(
                 models.ProcessingRequest.event_id == command.event_id,
             ).one()
+            self._assert_compatible_duplicate(existing, command)
             return _request_state(existing)
+
+    @staticmethod
+    def _assert_compatible_duplicate(
+        existing: models.ProcessingRequest,
+        command: ProcessingRequestCommand | YouTubeProcessingRequestCommand,
+    ) -> None:
+        if isinstance(command, YouTubeProcessingRequestCommand):
+            compatible = (
+                existing.source_type == YOUTUBE_SOURCE_TYPE
+                and existing.asset_id == command.asset_id
+                and existing.workspace_id == command.workspace_id
+                and existing.owner_id == command.owner_id
+                and existing.youtube_video_id == command.youtube_video_id
+                and existing.occurred_at == command.occurred_at
+                and existing.requested_at == command.requested_at
+            )
+        else:
+            compatible = existing.source_type in {
+                None,
+                OBJECT_STORAGE_SOURCE_TYPE,
+            }
+        if not compatible:
+            raise ConflictingProcessingRequestError(
+                "processing event ID conflicts with an existing request"
+            )
 
     def mark_enqueued(self, event_id: str, task_id: str) -> ProcessingRequestState:
         updated = (

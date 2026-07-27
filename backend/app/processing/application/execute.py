@@ -4,7 +4,7 @@ import logging
 from app.processing.domain.models import (
     ProcessingArtifact,
     ProcessingClaimConflict,
-    ProcessingExecutionCommand,
+    ProcessingExecutionCommandLike,
     ProcessingFailed,
     ProcessingFailure,
     ProcessingLeaseLost,
@@ -12,16 +12,13 @@ from app.processing.domain.models import (
     ProcessingSucceeded,
     ProcessingTranscriptRow,
 )
-from app.processing.domain.failures import safe_processing_error_message
+from app.processing.domain.failures import processing_failure_details
 from app.processing.ports.artifact_store import DirectUploadArtifactStore, ProcessingArtifactStore
 from app.processing.ports.media_source import ProcessingMediaSource
 from app.processing.ports.result_sink import ProcessingResultSink
 from app.processing.ports.transcription import ProcessingTranscriptionProvider
 
 logger = logging.getLogger(__name__)
-DEFAULT_PROCESSING_ERROR_CODE = "PROCESSING_FAILED"
-
-
 class ExecuteProcessingApplicationService:
     def __init__(
         self,
@@ -38,11 +35,11 @@ class ExecuteProcessingApplicationService:
         self._result_sink = result_sink
         self._clock = clock
 
-    def execute(self, command: ProcessingExecutionCommand, *, task_id: str | None = None):
+    def execute(self, command: ProcessingExecutionCommandLike, *, task_id: str | None = None):
         claim = self._artifact_store.claim(command, now=self._clock())
         if isinstance(claim, ProcessingClaimConflict):
             logger.info(
-                "skipping duplicate asset object task event_id=%s asset_id=%s status=%s",
+                "skipping duplicate processing task event_id=%s asset_id=%s status=%s",
                 command.event_id,
                 command.asset_id,
                 claim.status,
@@ -74,18 +71,19 @@ class ExecuteProcessingApplicationService:
             return ProcessingSkipped(command.event_id, command.asset_id, "lease_lost")
         except Exception as exc:
             logger.warning(
-                "asset object processing failed event_id=%s asset_id=%s failure_type=%s",
+                "asset processing failed event_id=%s asset_id=%s failure_type=%s",
                 command.event_id,
                 command.asset_id,
                 type(exc).__name__,
             )
             self._artifact_store.rollback()
+            failure_code, diagnostic_message = processing_failure_details(exc)
             outcome = ProcessingFailed(
                 command.event_id,
                 command.asset_id,
                 ProcessingFailure(
-                    DEFAULT_PROCESSING_ERROR_CODE,
-                    safe_processing_error_message(exc),
+                    failure_code,
+                    diagnostic_message,
                     exc,
                 ),
                 self._clock(),

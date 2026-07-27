@@ -3,7 +3,7 @@ from typing import Protocol
 
 from app.processing.domain.models import (
     ProcessingClaimConflict,
-    ProcessingExecutionCommand,
+    ProcessingExecutionCommandLike,
     ProcessingFailed,
     ProcessingLease,
     ProcessingSucceeded,
@@ -13,7 +13,7 @@ from app.processing.domain.models import (
 class ProcessingArtifactStore(Protocol):
     def claim(
         self,
-        command: ProcessingExecutionCommand,
+        command: ProcessingExecutionCommandLike,
         *,
         now: datetime,
     ) -> ProcessingLease | ProcessingClaimConflict:

@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import Connection, Engine, inspect, text
+from sqlalchemy import Connection, Engine, MetaData, Table, func, inspect, literal, select, text
 
 from app.core.database import Base, engine
 
@@ -25,6 +25,19 @@ _PROCESSING_LEASE_COLUMNS = {
     "attempt_count": "INTEGER NOT NULL DEFAULT 0",
 }
 
+_PROCESSING_SOURCE_COLUMNS = {
+    "source_type": "VARCHAR(32) NOT NULL DEFAULT 'OBJECT_STORAGE'",
+    "youtube_video_id": "VARCHAR(64)",
+}
+
+_OBJECT_STORAGE_COLUMN_NAMES = (
+    "storage_bucket",
+    "object_key",
+    "original_filename",
+    "content_type",
+    "size_bytes",
+)
+
 # Stable Project3 FastAPI PostgreSQL session advisory lock for schema creation and upgrades.
 # This value is intentionally fixed rather than derived from Python's process-randomized hash().
 _POSTGRES_SCHEMA_INITIALIZATION_LOCK_KEY = 5_126_144_801
@@ -38,6 +51,7 @@ def initialize_database_schema(bind: Engine = engine) -> None:
         return
 
     Base.metadata.create_all(bind=bind)
+    ensure_processing_request_source_schema(bind)
     ensure_processing_request_lease_schema(bind)
     ensure_processing_outbox_recovery_schema(bind)
     ensure_processing_transcript_timing_schema(bind)
@@ -56,6 +70,7 @@ def _initialize_postgresql_schema(bind: Engine) -> None:
             logger.info("acquired PostgreSQL schema initialization lock")
 
             Base.metadata.create_all(bind=connection)
+            ensure_processing_request_source_schema(connection)
             ensure_processing_request_lease_schema(connection)
             ensure_processing_outbox_recovery_schema(connection)
             ensure_processing_transcript_timing_schema(connection)
@@ -79,6 +94,9 @@ def _initialize_postgresql_schema(bind: Engine) -> None:
 
 
 def ensure_processing_request_lease_schema(bind: Engine | Connection) -> None:
+    # Keep the public narrow upgrader independently usable by older startup/tests that
+    # invoke it directly before querying the current ProcessingRequest ORM shape.
+    ensure_processing_request_source_schema(bind)
     inspector = inspect(bind)
     if "processing_requests" not in inspector.get_table_names():
         return
@@ -93,6 +111,38 @@ def ensure_processing_request_lease_schema(bind: Engine | Connection) -> None:
         with bind.begin() as connection:
             _apply_processing_request_lease_schema(connection, dialect, existing_columns)
     logger.info("processing request lease schema verified")
+
+
+def ensure_processing_request_source_schema(bind: Engine | Connection) -> None:
+    inspector = inspect(bind)
+    if "processing_requests" not in inspector.get_table_names():
+        return
+
+    existing_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("processing_requests")
+    }
+    existing_constraints = {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints("processing_requests")
+    }
+    dialect = bind.dialect.name
+    if isinstance(bind, Connection):
+        _apply_processing_request_source_schema(
+            bind,
+            dialect,
+            existing_columns,
+            existing_constraints,
+        )
+    else:
+        with bind.begin() as connection:
+            _apply_processing_request_source_schema(
+                connection,
+                dialect,
+                existing_columns,
+                existing_constraints,
+            )
+    logger.info("processing request source schema verified")
 
 
 def ensure_processing_outbox_recovery_schema(bind: Engine | Connection) -> None:
@@ -125,6 +175,194 @@ def ensure_processing_transcript_timing_schema(bind: Engine | Connection) -> Non
         with bind.begin() as connection:
             _apply_processing_transcript_timing_schema(connection, dialect, existing_columns)
     logger.info("processing transcript timing schema verified")
+
+
+def _apply_processing_request_source_schema(
+    connection: Connection,
+    dialect: str,
+    existing_columns: dict[str, dict],
+    existing_constraints: set[str],
+) -> None:
+    if dialect == "sqlite":
+        requires_rebuild = (
+            not set(_PROCESSING_SOURCE_COLUMNS).issubset(existing_columns)
+            or any(
+                not existing_columns[column_name]["nullable"]
+                for column_name in _OBJECT_STORAGE_COLUMN_NAMES
+                if column_name in existing_columns
+            )
+            or "ck_processing_request_source_shape" not in existing_constraints
+            or "ck_processing_request_youtube_video_id" not in existing_constraints
+        )
+        if requires_rebuild:
+            _rebuild_sqlite_processing_request_source_schema(
+                connection,
+                set(existing_columns),
+            )
+        return
+
+    for column_name, column_type in _PROCESSING_SOURCE_COLUMNS.items():
+        connection.execute(text(
+            f"ALTER TABLE processing_requests "
+            f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+        ))
+
+    connection.execute(text(
+        """
+        UPDATE processing_requests
+        SET source_type = 'OBJECT_STORAGE'
+        WHERE source_type IS NULL
+        """
+    ))
+
+    if dialect != "postgresql":
+        return
+
+    connection.execute(text(
+        """
+        ALTER TABLE processing_requests
+        ALTER COLUMN source_type SET DEFAULT 'OBJECT_STORAGE',
+        ALTER COLUMN source_type SET NOT NULL,
+        ALTER COLUMN storage_bucket DROP NOT NULL,
+        ALTER COLUMN object_key DROP NOT NULL,
+        ALTER COLUMN original_filename DROP NOT NULL,
+        ALTER COLUMN content_type DROP NOT NULL,
+        ALTER COLUMN size_bytes DROP NOT NULL
+        """
+    ))
+    connection.execute(text(
+        """
+        CREATE INDEX IF NOT EXISTS ix_processing_requests_source_type
+        ON processing_requests (source_type)
+        """
+    ))
+    connection.execute(text(
+        """
+        DO $phase2_source$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint constraint_record
+                JOIN pg_class table_record
+                  ON table_record.oid = constraint_record.conrelid
+                JOIN pg_namespace schema_record
+                  ON schema_record.oid = table_record.relnamespace
+                WHERE constraint_record.conname = 'ck_processing_request_source_shape'
+                  AND constraint_record.contype = 'c'
+                  AND table_record.relname = 'processing_requests'
+                  AND schema_record.nspname = current_schema()
+            ) THEN
+                ALTER TABLE processing_requests
+                ADD CONSTRAINT ck_processing_request_source_shape CHECK (
+                    (
+                        source_type = 'OBJECT_STORAGE'
+                        AND youtube_video_id IS NULL
+                        AND storage_bucket IS NOT NULL
+                        AND object_key IS NOT NULL
+                        AND content_type IS NOT NULL
+                        AND size_bytes IS NOT NULL
+                        AND size_bytes >= 0
+                    )
+                    OR (
+                        source_type = 'YOUTUBE'
+                        AND youtube_video_id IS NOT NULL
+                        AND storage_bucket IS NULL
+                        AND object_key IS NULL
+                        AND original_filename IS NULL
+                        AND content_type IS NULL
+                        AND size_bytes IS NULL
+                    )
+                );
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint constraint_record
+                JOIN pg_class table_record
+                  ON table_record.oid = constraint_record.conrelid
+                JOIN pg_namespace schema_record
+                  ON schema_record.oid = table_record.relnamespace
+                WHERE constraint_record.conname =
+                      'ck_processing_request_youtube_video_id'
+                  AND constraint_record.contype = 'c'
+                  AND table_record.relname = 'processing_requests'
+                  AND schema_record.nspname = current_schema()
+            ) THEN
+                ALTER TABLE processing_requests
+                ADD CONSTRAINT ck_processing_request_youtube_video_id CHECK (
+                    youtube_video_id IS NULL
+                    OR (
+                        length(youtube_video_id) BETWEEN 1 AND 64
+                        AND youtube_video_id ~ '^[A-Za-z0-9_-]+$'
+                    )
+                );
+            END IF;
+        END
+        $phase2_source$;
+        """
+    ))
+
+
+def _rebuild_sqlite_processing_request_source_schema(
+    connection: Connection,
+    existing_column_names: set[str],
+) -> None:
+    from app import models
+
+    legacy_metadata = MetaData()
+    legacy_table = models.ProcessingRequest.__table__.to_metadata(
+        legacy_metadata,
+        name="_processing_requests_source_upgrade",
+    )
+    legacy_table.indexes.clear()
+    for constraint in tuple(legacy_table.constraints):
+        if (
+            constraint.name == "ck_processing_request_youtube_video_id"
+            and " ~ " in str(getattr(constraint, "sqltext", ""))
+        ):
+            legacy_table.constraints.remove(constraint)
+    legacy_table.create(connection)
+
+    source_table = Table(
+        "processing_requests",
+        MetaData(),
+        autoload_with=connection,
+    )
+
+    selected_values = []
+    for column in legacy_table.columns:
+        if column.name == "source_type":
+            if column.name in existing_column_names:
+                selected_values.append(
+                    func.coalesce(source_table.c.source_type, literal("OBJECT_STORAGE"))
+                )
+            else:
+                selected_values.append(literal("OBJECT_STORAGE"))
+        elif column.name == "youtube_video_id":
+            selected_values.append(
+                source_table.c.youtube_video_id
+                if column.name in existing_column_names
+                else literal(None)
+            )
+        elif column.name == "attempt_count" and column.name not in existing_column_names:
+            selected_values.append(literal(0))
+        elif column.name in existing_column_names:
+            selected_values.append(source_table.c[column.name])
+        else:
+            selected_values.append(literal(None))
+
+    connection.execute(
+        legacy_table.insert().from_select(
+            [column.name for column in legacy_table.columns],
+            select(*selected_values),
+        )
+    )
+    connection.execute(text("DROP TABLE processing_requests"))
+    connection.execute(text(
+        "ALTER TABLE _processing_requests_source_upgrade RENAME TO processing_requests"
+    ))
+    for index in models.ProcessingRequest.__table__.indexes:
+        index.create(connection, checkfirst=True)
 
 
 def _apply_processing_request_lease_schema(

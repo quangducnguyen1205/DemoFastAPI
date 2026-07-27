@@ -114,6 +114,7 @@ class RuntimeCompositionSmokeTest(unittest.TestCase):
         self.assertEqual(celery_app.conf.accept_content, ["json"])
         self.assertIn("process_video", celery_app.tasks)
         self.assertIn("process_asset_object", celery_app.tasks)
+        self.assertIn("process_youtube_asset", celery_app.tasks)
 
     def test_consumer_and_relay_factories_compose_application_services(self) -> None:
         dispatch = build_processing_dispatch_service(MagicMock(), dispatcher=MagicMock())

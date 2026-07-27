@@ -46,6 +46,22 @@ def _env_bounded_positive_int(name: str, default: int, maximum: int) -> int:
     return value
 
 
+def _env_bounded_nonnegative_int(name: str, default: int, maximum: int) -> int:
+    val = _env(name)
+    if val is None:
+        value = default
+    else:
+        try:
+            value = int(val)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be an integer") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+    if value > maximum:
+        raise ValueError(f"{name} must be <= {maximum}")
+    return value
+
+
 def _env_float(name: str, default: float) -> float:
     val = _env(name)
     if val is None:
@@ -105,6 +121,15 @@ class Settings:
     # Kafka consumer configuration. The broker itself is owned outside this repo.
     KAFKA_BOOTSTRAP_SERVERS: str = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     KAFKA_ASSET_PROCESSING_TOPIC: str = _env("KAFKA_ASSET_PROCESSING_TOPIC", "asset.processing.requested.v1")
+    KAFKA_ASSET_PROCESSING_V2_TOPIC: str = _env(
+        "KAFKA_ASSET_PROCESSING_V2_TOPIC",
+        "asset.processing.requested.v2",
+    )
+    if KAFKA_ASSET_PROCESSING_V2_TOPIC == KAFKA_ASSET_PROCESSING_TOPIC:
+        raise ValueError(
+            "KAFKA_ASSET_PROCESSING_V2_TOPIC must differ from "
+            "KAFKA_ASSET_PROCESSING_TOPIC"
+        )
     KAFKA_CONSUMER_GROUP: str = _env("KAFKA_CONSUMER_GROUP", "fastapi-processing-v1")
     KAFKA_AUTO_OFFSET_RESET: str = _env("KAFKA_AUTO_OFFSET_RESET", "earliest")
     KAFKA_RECONNECT_BACKOFF_SECONDS: int = _env_int("KAFKA_RECONNECT_BACKOFF_SECONDS", 5)
@@ -165,6 +190,39 @@ class Settings:
         _env("MINIO_SECRET_KEY", "minioadmin"),
     )
     OBJECT_STORAGE_REGION: str = _env("OBJECT_STORAGE_REGION", "us-east-1")
+
+    # Temporary public YouTube acquisition for dormant Kafka V2 processing.
+    YOUTUBE_MAX_DURATION_SECONDS: int = _env_bounded_positive_int(
+        "YOUTUBE_MAX_DURATION_SECONDS",
+        7_200,
+        86_400,
+    )
+    YOUTUBE_MAX_FILE_SIZE_BYTES: int = _env_bounded_positive_int(
+        "YOUTUBE_MAX_FILE_SIZE_BYTES",
+        1_073_741_824,
+        10_737_418_240,
+    )
+    YOUTUBE_SOCKET_TIMEOUT_SECONDS: int = _env_bounded_positive_int(
+        "YOUTUBE_SOCKET_TIMEOUT_SECONDS",
+        30,
+        300,
+    )
+    YOUTUBE_ACQUISITION_TIMEOUT_SECONDS: int = _env_bounded_positive_int(
+        "YOUTUBE_ACQUISITION_TIMEOUT_SECONDS",
+        900,
+        7_200,
+    )
+    YOUTUBE_DOWNLOAD_RETRIES: int = _env_bounded_nonnegative_int(
+        "YOUTUBE_DOWNLOAD_RETRIES",
+        2,
+        10,
+    )
+    if YOUTUBE_ACQUISITION_TIMEOUT_SECONDS < YOUTUBE_SOCKET_TIMEOUT_SECONDS:
+        raise ValueError(
+            "YOUTUBE_ACQUISITION_TIMEOUT_SECONDS must be greater than or equal to "
+            "YOUTUBE_SOCKET_TIMEOUT_SECONDS"
+        )
+
     LOG_LEVEL: str = _env("LOG_LEVEL", "INFO")
 
     # Internal assistant generation. Disabled by default; Spring supplies all context.

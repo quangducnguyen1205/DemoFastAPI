@@ -5,10 +5,14 @@ import time
 
 from app.config.settings import settings
 from app.core.celery_app import celery_app
-from app.processing.adapters.celery_dispatcher import decode_processing_task_payload
+from app.processing.adapters.celery_dispatcher import (
+    decode_processing_task_payload,
+    decode_youtube_processing_task_payload,
+)
 from app.bootstrap.worker import (
     build_direct_upload_execution_service,
     build_processing_execution_service,
+    build_youtube_processing_execution_service,
 )
 from app.processing.domain.models import (
     ProcessingFailed,
@@ -40,6 +44,62 @@ def _lease_retry_delay_seconds(
     broker_safe_limit = max(1, visibility_limit - 1)
     remaining_seconds = max(1, math.ceil((retry_at - current).total_seconds()))
     return min(remaining_seconds, poll_limit, broker_safe_limit)
+
+
+def _execute_processing_task(
+    task,
+    command,
+    *,
+    task_started_at: float,
+    task_id: str | None,
+    service_builder,
+) -> dict:
+    service = service_builder()
+    try:
+        outcome = service.execute(command, task_id=task_id)
+        if isinstance(outcome, ProcessingSkipped):
+            if outcome.status == "processing" and outcome.retry_at is not None:
+                retry_delay = _lease_retry_delay_seconds(outcome.retry_at)
+                logger.info(
+                    "polling active processing lease event_id=%s asset_id=%s retry_in_seconds=%s lease_expires_at=%s",
+                    outcome.event_id,
+                    outcome.asset_id,
+                    retry_delay,
+                    outcome.retry_at.isoformat(),
+                )
+                raise task.retry(countdown=retry_delay)
+            result = {
+                "status": outcome.status,
+                "asset_id": outcome.asset_id,
+                "duplicate": True,
+            }
+        elif isinstance(outcome, ProcessingSucceeded):
+            result = {
+                "status": "ready",
+                "asset_id": outcome.asset_id,
+                "segments": [row.text for row in outcome.artifact.rows],
+            }
+        elif isinstance(outcome, ProcessingFailed):
+            result = {
+                "status": "failed",
+                "asset_id": outcome.asset_id,
+                "error": outcome.failure.diagnostic_message,
+            }
+        else:  # pragma: no cover - the use case has an exhaustive result union
+            raise TypeError(f"unsupported processing outcome: {type(outcome).__name__}")
+        log_processing_timing(
+            "total_task_ms",
+            (time.perf_counter() - task_started_at) * 1000,
+            task_id=task_id,
+            asset_id=command.asset_id,
+            status=result["status"],
+            segment_count=len(result.get("segments", ()))
+            if result["status"] == "ready"
+            else None,
+        )
+        return result
+    finally:
+        service.close()
 
 
 @celery_app.task(name="process_video", bind=True)
@@ -83,43 +143,38 @@ def process_asset_object_task(self, request: dict) -> dict:
         command.content_type,
         task_id,
     )
-    service = build_processing_execution_service()
-    try:
-        outcome = service.execute(command, task_id=task_id)
-        if isinstance(outcome, ProcessingSkipped):
-            if outcome.status == "processing" and outcome.retry_at is not None:
-                retry_delay = _lease_retry_delay_seconds(outcome.retry_at)
-                logger.info(
-                    "polling active processing lease event_id=%s asset_id=%s retry_in_seconds=%s lease_expires_at=%s",
-                    outcome.event_id,
-                    outcome.asset_id,
-                    retry_delay,
-                    outcome.retry_at.isoformat(),
-                )
-                raise self.retry(countdown=retry_delay)
-            result = {"status": outcome.status, "asset_id": outcome.asset_id, "duplicate": True}
-        elif isinstance(outcome, ProcessingSucceeded):
-            result = {
-                "status": "ready",
-                "asset_id": outcome.asset_id,
-                "segments": [row.text for row in outcome.artifact.rows],
-            }
-        elif isinstance(outcome, ProcessingFailed):
-            result = {
-                "status": "failed",
-                "asset_id": outcome.asset_id,
-                "error": outcome.failure.diagnostic_message,
-            }
-        else:  # pragma: no cover - the use case has an exhaustive result union
-            raise TypeError(f"unsupported processing outcome: {type(outcome).__name__}")
-        log_processing_timing(
-            "total_task_ms",
-            (time.perf_counter() - task_started_at) * 1000,
-            task_id=task_id,
-            asset_id=command.asset_id,
-            status=result["status"],
-            segment_count=len(result.get("segments", ())) if result["status"] == "ready" else None,
-        )
-        return result
-    finally:
-        service.close()
+    return _execute_processing_task(
+        self,
+        command,
+        task_started_at=task_started_at,
+        task_id=task_id,
+        service_builder=build_processing_execution_service,
+    )
+
+
+@celery_app.task(
+    name="process_youtube_asset",
+    bind=True,
+    acks_late=True,
+    acks_on_failure_or_timeout=True,
+    reject_on_worker_lost=True,
+    max_retries=None,
+)
+def process_youtube_asset_task(self, request: dict) -> dict:
+    task_started_at = time.perf_counter()
+    task_id = getattr(self.request, "id", None)
+    command = decode_youtube_processing_task_payload(request)
+    logger.info(
+        "starting YouTube processing event_id=%s asset_id=%s version=2 youtube_video_id=%s task_id=%s",
+        command.event_id,
+        command.asset_id,
+        command.youtube_video_id,
+        task_id,
+    )
+    return _execute_processing_task(
+        self,
+        command,
+        task_started_at=task_started_at,
+        task_id=task_id,
+        service_builder=build_youtube_processing_execution_service,
+    )
