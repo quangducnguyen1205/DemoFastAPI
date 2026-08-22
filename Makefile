@@ -2,7 +2,8 @@ DOCKER ?= docker
 COMPOSE_FILE ?=
 COMPOSE = $(DOCKER) compose $(if $(COMPOSE_FILE),-f $(COMPOSE_FILE),)
 PROJECT3_COMPOSE = $(DOCKER) compose -f docker-compose.yml -f docker-compose.project3.yml
-PROJECT3_SERVICES = db redis backend worker consumer result-relay
+PROJECT3_INFRA_SERVICES = db redis
+PROJECT3_RUNTIME_SERVICES = backend worker consumer result-relay
 
 BACKEND_SERVICE ?= backend
 WORKER_SERVICE ?= worker
@@ -39,7 +40,8 @@ help: ## Show available commands
 	@printf "  project3-config   Render and validate the integrated Compose configuration\n\n"
 
 up: ## Start the coherent Project3 topology without building or pulling images
-	$(PROJECT3_COMPOSE) up $(UP_FLAGS) --no-build --pull never $(PROJECT3_SERVICES)
+	$(PROJECT3_COMPOSE) up $(UP_FLAGS) --no-build --pull never $(PROJECT3_INFRA_SERVICES)
+	$(PROJECT3_COMPOSE) up $(UP_FLAGS) --no-build --pull never --force-recreate --no-deps $(PROJECT3_RUNTIME_SERVICES)
 
 project3-config: ## Render the coherent Project3 Compose configuration without starting services
 	$(PROJECT3_COMPOSE) config

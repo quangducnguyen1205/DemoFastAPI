@@ -127,7 +127,7 @@ For the coherent Project3 runtime with Spring-owned Kafka and MinIO, start Sprin
 make up
 ```
 
-`make up` uses both Compose files and explicitly includes `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay` without building or pulling. The relay receives both required safety gates. Base Compose and `make standalone-up` remain standalone-compatible; the one-shot relay and direct-upload endpoints are not removed.
+`make up` uses both Compose files and explicitly includes `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay` without building or pulling. It preserves the existing PostgreSQL and Redis containers, then recreates only the four Project3 runtime containers so Docker refreshes their attachment to the current external Spring infrastructure network. This avoids stale network IDs after that external network is recreated. The relay receives both required safety gates. Base Compose and `make standalone-up` remain standalone-compatible; the one-shot relay and direct-upload endpoints are not removed.
 
 The controlled local observation campaign supports deprecation of the direct-processing endpoint,
 but it does not claim production-scale stability. The current Spring product core has removed its

@@ -187,7 +187,7 @@ Expected local startup order:
 4. In a later cross-repository slice, deploy/enable the Spring V2 producer only after the
    FastAPI V2 consumer is healthy. The current Spring application publishes no V2 event.
 
-The target renders both Compose files, starts `db`, `redis`, `backend`, `worker`, `consumer`, and automatic `result-relay`, and passes `--no-build`. The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. DemoFastAPI `db` and `redis` stay on the normal local network.
+The target renders both Compose files, starts `db` and `redis` without recreating them, then force-recreates `backend`, `worker`, `consumer`, and automatic `result-relay` with `--no-deps`; both commands pass `--no-build` and `--pull never`. Recreating only the runtime containers refreshes their attachment when the external Spring network was replaced while preserving PostgreSQL and the Redis/Celery broker container. The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. DemoFastAPI `db` and `redis` stay on the normal local network.
 
 Container-side integration defaults in the overlay are:
 
