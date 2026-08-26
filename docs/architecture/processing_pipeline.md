@@ -34,7 +34,7 @@ models, or Whisper transport values.
 
 The Kafka adapter still validates the unchanged `asset.processing.requested` version 1
 envelope and maps it to the explicit object-storage `ProcessingRequestCommand`. It also
-subscribes, with the same consumer group, to dormant topic
+subscribes, with the same consumer group, to active topic
 `asset.processing.requested.v2`. An exact version 2 event with `sourceType=YOUTUBE` maps to
 the separate `YouTubeProcessingRequestCommand`; arbitrary URLs, object-storage fields, extra
 payload fields, and unsafe video IDs are rejected. `DispatchProcessingApplicationService`
@@ -126,12 +126,14 @@ and result-outbox behavior are retained.
 
 `YouTubeProcessingMediaSource` receives only the validated video ID and constructs
 `https://www.youtube.com/watch?v={youtubeVideoId}` internally. It runs the explicitly pinned
-`yt-dlp[pin,pin-deno]==2026.7.4` module through an argument-list subprocess with `shell=False`.
+`yt-dlp[pin,pin-deno]==2026.8.19` module through an argument-list subprocess with `shell=False`.
 The subprocess strategy was selected over the embedding API to provide a hard wall-clock
 deadline, process-group termination on worker cancellation/timeout, and a directory-size
 guard without sharing provider-global state. The pinned extras include the matching local EJS
-component and Deno runtime required by current YouTube extraction; remote components and
-plugins are disabled.
+component and Deno runtime required by current YouTube extraction. The worker image also pins
+the single required `bgutil-ytdlp-pot-provider==1.3.2` plugin and selects the `mweb` client.
+The plugin calls a digest-pinned internal provider sidecar; remote components and all
+account/cookie inputs are disabled.
 
 Every attempt owns a `TemporaryDirectory` whose prefix is derived from hashed internal event
 and asset IDs. The output template is fixed as `media.%(ext)s`; provider titles never become
@@ -148,6 +150,14 @@ Public finite single videos and completed recordings that behave as finite video
 supported. Active/upcoming/post-live streams are rejected. Private, deleted, age-restricted,
 region-blocked, and authenticated/cookie-only media are unsupported.
 
+The media-source adapter is the sole fresh-retry owner. Provider/GVS/network/rate-limit and
+unknown failures get at most one new complete extraction, for two attempts total with a bounded
+one-second backoff inside the existing deadline. Each attempt has a fresh subdirectory and
+yt-dlp process. Permanent policy/unavailable/live/size failures and total deadline expiry are
+not retried. Celery records the exhausted controlled failure once and does not layer autoretry
+on top. Format 18 is not an application fallback and provider-unavailable diagnostics fail the
+attempt rather than silently using it.
+
 Provider output is never copied into a result. Controlled failures map to stable codes:
 `YOUTUBE_UNAVAILABLE`, `YOUTUBE_LIVE_NOT_SUPPORTED`,
 `YOUTUBE_DURATION_LIMIT_EXCEEDED`, `YOUTUBE_SIZE_LIMIT_EXCEEDED`,
@@ -155,7 +165,7 @@ Provider output is never copied into a result. Controlled failures map to stable
 failed V1 result and returns normally from Celery; worker/process loss remains a lease and
 broker-redelivery concern.
 
-The V2 path is deployed dormant because Spring has no V2 producer yet. FastAPI does not own
+The V2 path is active and Spring publishes the V2 request. FastAPI does not own
 public YouTube product creation, URL normalization, authorization, or duplicate-product
 policy. Acquired media is temporary and not retained. Successful and failed outcomes continue
 to use `asset.processing.result.v1` and the existing V1 envelope/payload.
@@ -227,7 +237,7 @@ The stable external import/command paths remain `app.main:app`,
 `python -m app.relays.processing_outbox_auto_relay`. They are thin adapters only. Settings
 remain in the existing flat `Settings` object because splitting it would add forwarding
 configuration without changing ownership. Existing environment names/defaults are unchanged;
-the dormant V2 topic and bounded YouTube acquisition settings are additive.
+the V2 topic and bounded YouTube acquisition settings are additive.
 
 The obsolete `processing.composition`, `services.processing_requests`, result-outbox service
 wrappers, task-owned processing algorithm, and SQLAlchemy transcript helper were removed only
@@ -236,7 +246,7 @@ after repository-wide import-string and command searches showed no remaining cal
 ## Remaining FastAPI debt
 
 - There is no crash-age policy for abandoned `publishing` rows.
-- Spring does not yet publish the dormant V2 request contract.
+- Spring publishes the active V2 request contract; FastAPI remains only its processing owner.
 - Public YouTube product creation, duplicate policy, authorized retry API, and frontend source
   entry remain outside this repository.
 - SQLAlchemy metadata plus the existing narrow schema upgrader remain in place instead of

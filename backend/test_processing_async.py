@@ -94,6 +94,10 @@ class ProcessingSettingsTest(unittest.TestCase):
         self.assertEqual(settings.YOUTUBE_SOCKET_TIMEOUT_SECONDS, 30)
         self.assertEqual(settings.YOUTUBE_ACQUISITION_TIMEOUT_SECONDS, 900)
         self.assertEqual(settings.YOUTUBE_DOWNLOAD_RETRIES, 2)
+        self.assertEqual(
+            settings.YOUTUBE_PO_TOKEN_PROVIDER_URL,
+            "http://youtube-pot-provider:4416",
+        )
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_INTERVAL_SECONDS, 30)
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_COOLDOWN_SECONDS, 60)
         self.assertEqual(settings.PROCESSING_OUTBOX_RECOVERY_BATCH_SIZE, 50)
@@ -154,6 +158,10 @@ class ProcessingSettingsTest(unittest.TestCase):
             {"YOUTUBE_ACQUISITION_TIMEOUT_SECONDS": "7201"},
             {"YOUTUBE_DOWNLOAD_RETRIES": "-1"},
             {"YOUTUBE_DOWNLOAD_RETRIES": "11"},
+            {"YOUTUBE_PO_TOKEN_PROVIDER_URL": "https://youtube-pot-provider:4416"},
+            {"YOUTUBE_PO_TOKEN_PROVIDER_URL": "http://user:secret@provider:4416"},
+            {"YOUTUBE_PO_TOKEN_PROVIDER_URL": "http://provider:4416/path"},
+            {"YOUTUBE_PO_TOKEN_PROVIDER_URL": "http://provider"},
             {
                 "YOUTUBE_SOCKET_TIMEOUT_SECONDS": "60",
                 "YOUTUBE_ACQUISITION_TIMEOUT_SECONDS": "30",

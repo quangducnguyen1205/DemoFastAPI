@@ -40,11 +40,36 @@ services:
     ports:
       - "6379:6379"
 
+  youtube-pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider@sha256:20bd6ad8561d71c628fb3d4fe35a7fcd2c9ef84eecd2bbf40f77dd0d8a8e3799
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/deno
+        - eval
+        - const response = await fetch('http://127.0.0.1:4416/ping'); if (!response.ok) Deno.exit(1);
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   worker:
     image: demofirstbackend-python:latest
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      youtube-pot-provider:
+        condition: service_healthy
     environment:
       PYTHONPATH: /backend
       DATABASE_URL: ${DATABASE_URL}
@@ -64,6 +89,7 @@ services:
       YOUTUBE_SOCKET_TIMEOUT_SECONDS: ${YOUTUBE_SOCKET_TIMEOUT_SECONDS:-30}
       YOUTUBE_ACQUISITION_TIMEOUT_SECONDS: ${YOUTUBE_ACQUISITION_TIMEOUT_SECONDS:-900}
       YOUTUBE_DOWNLOAD_RETRIES: ${YOUTUBE_DOWNLOAD_RETRIES:-2}
+      YOUTUBE_PO_TOKEN_PROVIDER_URL: ${YOUTUBE_PO_TOKEN_PROVIDER_URL:-http://youtube-pot-provider:4416}
     env_file:
       - ${APP_ENV_FILE:-.env}
     volumes:

@@ -18,7 +18,9 @@ from app.processing.adapters.sqlalchemy_stores import (
 )
 from app.processing.application.execute import ExecuteProcessingApplicationService
 from app.processing.domain.failures import (
+    YOUTUBE_ACQUISITION_FAILED,
     YOUTUBE_UNAVAILABLE,
+    YouTubePoTokenProviderUnavailableError,
     YouTubeUnavailableError,
 )
 from app.processing.domain.models import (
@@ -211,6 +213,31 @@ class YouTubeExecutionLeaseIntegrationTest(unittest.TestCase):
             "YouTube video is unavailable for public unauthenticated acquisition",
         )
         self.assertNotIn("http", outbox.payload["errorMessage"].lower())
+        db.close()
+
+    def test_provider_retry_exhaustion_records_one_generic_terminal_result(self) -> None:
+        db = self.Session()
+        add_request(db, status="accepted")
+        media_source = TrackingMediaSource(
+            failure=YouTubePoTokenProviderUnavailableError()
+        )
+
+        outcome = self._service(
+            db,
+            now=NOW,
+            media_source=media_source,
+        ).execute(command())
+
+        self.assertIsInstance(outcome, ProcessingFailed)
+        self.assertEqual(outcome.failure.code, YOUTUBE_ACQUISITION_FAILED)
+        self.assertEqual(media_source.acquire_count, 1)
+        self.assertEqual(db.query(models.ProcessingOutboxEvent).count(), 1)
+        outbox = db.query(models.ProcessingOutboxEvent).one()
+        self.assertEqual(outbox.payload["errorCode"], YOUTUBE_ACQUISITION_FAILED)
+        self.assertEqual(
+            outbox.payload["errorMessage"],
+            "YouTube media acquisition failed",
+        )
         db.close()
 
     def test_duplicate_success_does_not_create_another_result_intent(self) -> None:

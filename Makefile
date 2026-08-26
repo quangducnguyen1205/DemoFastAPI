@@ -2,7 +2,7 @@ DOCKER ?= docker
 COMPOSE_FILE ?=
 COMPOSE = $(DOCKER) compose $(if $(COMPOSE_FILE),-f $(COMPOSE_FILE),)
 PROJECT3_COMPOSE = $(DOCKER) compose -f docker-compose.yml -f docker-compose.project3.yml
-PROJECT3_INFRA_SERVICES = db redis
+PROJECT3_INFRA_SERVICES = db redis youtube-pot-provider
 PROJECT3_RUNTIME_SERVICES = backend worker consumer result-relay
 
 BACKEND_SERVICE ?= backend
@@ -23,7 +23,8 @@ CONTAINER_SHELL ?= sh -lc 'if command -v bash >/dev/null 2>&1; then exec bash; e
 	standalone-up project3-config \
 	backend-up backend-down backend-build backend-rebuild backend-logs backend-shell \
 	worker-up worker-down worker-build worker-rebuild worker-logs worker-shell \
-	consumer-up consumer-down consumer-build consumer-rebuild consumer-logs consumer-shell
+	consumer-up consumer-down consumer-build consumer-rebuild consumer-logs consumer-shell \
+	youtube-live-canary
 
 help: ## Show available commands
 	@printf "\nDocker Compose shortcuts\n\n"
@@ -45,6 +46,9 @@ up: ## Start the coherent Project3 topology without building or pulling images
 
 project3-config: ## Render the coherent Project3 Compose configuration without starting services
 	$(PROJECT3_COMPOSE) config
+
+youtube-live-canary: ## Run the explicit live YouTube media-byte canary against an active provider
+	$(COMPOSE) run --rm --no-deps worker python -m app.tools.youtube_live_canary --live-network-test
 
 standalone-up: ## Start all active services in detached mode
 	$(COMPOSE) up $(UP_FLAGS)

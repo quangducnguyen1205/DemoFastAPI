@@ -10,11 +10,12 @@ This guide covers the processing-only branch of Repo A.
 - `result-relay` (one-shot/manual in base Compose; automatic and active in the Project3 overlay)
 - `db`
 - `redis`
+- `youtube-pot-provider` (internal-only PO-token sidecar; no host port)
 
 ## Start the processing stack
 
 ```bash
-docker compose up --build backend worker consumer db redis
+docker compose up --build backend worker consumer db redis youtube-pot-provider
 ```
 
 ## Important environment values
@@ -56,6 +57,8 @@ docker compose up --build backend worker consumer db redis
 - `YOUTUBE_ACQUISITION_TIMEOUT_SECONDS` (default: `900`, valid: `1..7200` and
   not less than the socket timeout)
 - `YOUTUBE_DOWNLOAD_RETRIES` (default: `2`, valid: `0..10`)
+- `YOUTUBE_PO_TOKEN_PROVIDER_URL` (default:
+  `http://youtube-pot-provider:4416`; HTTP origin only, with no credentials/path/query)
 
 Current Compose defaults align media storage at `/backend/media` inside the backend and worker containers.
 
@@ -95,8 +98,8 @@ curl http://localhost:8000/videos/<video_id>/transcript
 docker compose up --build consumer
 ```
 
-The same consumer group subscribes to `asset.processing.requested.v1` and the dormant
-`asset.processing.requested.v2` topic. Adding V2 does not change the V1 group or V1 task
+The same consumer group subscribes to the active `asset.processing.requested.v1` and
+`asset.processing.requested.v2` topics. V2 does not change the V1 group or V1 task
 route, so it does not intentionally replay existing V1 offsets. The consumer commits valid
 offsets only after durable request creation and successful Celery handoff. Invalid,
 unsupported, or topic/version-mismatched messages are logged with safe identifiers and
@@ -128,14 +131,22 @@ The one-hour visibility default is deliberately not raised to four hours because
 worker/host loss would then delay broker recovery for up to four hours. If applications share a
 Redis broker, keep the visibility settings aligned because the shortest configured value wins.
 
-## Dormant YouTube V2 runtime
+## YouTube V2 runtime
 
-The container pins `yt-dlp[pin,pin-deno]==2026.7.4`. The matching pinned EJS component and
-Deno JavaScript runtime are installed through those extras; `ffmpeg` remains the existing
-system package. The worker invokes yt-dlp as `python -m yt_dlp` with an argument list and
-`shell=False`, disables playlists, plugins, remote components, cache, cookies, and browser
-cookie stores, and applies the configured socket timeout, total deadline, download retries,
-duration limit, and file-size limit.
+The container pins `yt-dlp[pin,pin-deno]==2026.8.19` and
+`bgutil-ytdlp-pot-provider==1.3.2`. The matching EJS component and Deno runtime are installed
+through the yt-dlp extras; `ffmpeg` remains the existing system package. The worker invokes
+yt-dlp as `python -m yt_dlp` with an argument list and `shell=False`, explicitly selects the
+`mweb` player client, and points the pinned plugin at the internal provider origin. Remote
+components, playlists, cache, cookies, and browser cookie stores remain disabled. The immutable
+worker dependency set is the plugin allowlist; this is not a generic plugin framework.
+
+The provider image is pinned by digest to the official `1.3.2-deno` artifact. It runs as the
+non-root image user, read-only, without Linux capabilities or a published host port, and has a
+bounded `/ping` health check. The worker receives only `YOUTUBE_PO_TOKEN_PROVIDER_URL`; no PO
+token is configured, logged, or stored in Redis, PostgreSQL, Kafka, MinIO, or environment files.
+The provider performs its own content-bound token caching (six-hour default TTL), while yt-dlp
+requests the appropriate token binding for each video/context.
 
 FastAPI accepts only a 1–64-character `[A-Za-z0-9_-]+` video ID and constructs the fixed
 canonical watch URL internally. Every attempt downloads into its own safely prefixed temporary
@@ -147,15 +158,48 @@ failure, timeout, or normal task cancellation, so YouTube media is not retained 
 Supported scope is one public finite video. Completed livestream recordings may pass only
 when yt-dlp reports a finite non-live item. Active/upcoming/post-live streams, playlists,
 private/deleted/age-restricted/region-blocked media, and authenticated/cookie access are
-controlled failures. Provider diagnostics are not returned. Stable result codes are
+controlled failures. User cookies and manual PO tokens are intentionally unsupported because
+they introduce account/secret state and current tokens may be short-lived and content-bound.
+Provider diagnostics are not returned. Stable result codes are
 `YOUTUBE_UNAVAILABLE`, `YOUTUBE_LIVE_NOT_SUPPORTED`,
 `YOUTUBE_DURATION_LIMIT_EXCEEDED`, `YOUTUBE_SIZE_LIMIT_EXCEEDED`,
 `YOUTUBE_ACQUISITION_TIMEOUT`, and `YOUTUBE_ACQUISITION_FAILED`.
 
-This V2 consumer is dormant after deployment: Spring does not publish V2 yet. Result
-publication remains `asset.processing.result.v1`; there is no V2 result topic. Public product
-creation, canonical submitted-URL normalization, authorization, and duplicate-product policy
-must be implemented in Spring before the topic is activated.
+The adapter owns one bounded fresh retry after a provider, GVS, network, rate-limit, or unknown
+acquisition failure: maximum two complete extraction attempts with a one-second bounded
+backoff under the existing total deadline. Each retry uses a new attempt directory and a new
+yt-dlp process so it does not reuse a signed media URL. Private/unavailable/live/policy/size and
+total-timeout failures are terminal. Celery does not autoretry these controlled outcomes, which
+prevents retry multiplication and duplicate terminal results. Format 18 is not a fallback; a
+provider-unavailable warning is treated as failure even if yt-dlp can temporarily select it.
+
+Spring actively publishes V2 requests. Result publication remains
+`asset.processing.result.v1`; there is no V2 result topic. Public product creation, submitted-URL
+normalization, authorization, and duplicate-product policy remain Spring-owned.
+
+Safe operator signals are `youtube_acquisition_strategy`,
+`youtube_pot_provider_unavailable`, `youtube_gvs_forbidden`, `youtube_rate_limited`,
+`youtube_acquisition_retry`, `youtube_acquisition_success`, and
+`youtube_acquisition_terminal_failure`. They contain only the video ID, strategy, attempt,
+safe error family, and selected format. yt-dlp stderr, signed Google Video URLs, tokens, cookies,
+and complete query strings are never copied into logs or Kafka results.
+
+Run the separate live canary only when the provider and worker image are available:
+
+```bash
+make youtube-live-canary
+```
+
+This is a `LIVE NETWORK TEST - NOT PART OF NORMAL UNIT TESTS`. It uses a small fixed set of
+public finite videos, requires the explicit CLI acknowledgement embedded in the Make target,
+downloads actual media bytes, proves metadata separately from byte acquisition, verifies temp
+cleanup, prints only safe JSON, and returns non-zero on failure.
+
+Upstream references for the pinned strategy:
+
+- [yt-dlp stable 2026.08.19](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19)
+- [yt-dlp PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide)
+- [bgutil-ytdlp-pot-provider 1.3.2](https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/tag/1.3.2)
 
 ## Project3 cross-compose integration
 
@@ -184,10 +228,16 @@ Expected local startup order:
 2. Build the updated DemoFastAPI image and start DemoFastAPI with both Compose files so its
    advisory-locked schema upgrade and dual-topic consumer are ready.
 3. Start the Spring application or run the manual V1 smoke command.
-4. In a later cross-repository slice, deploy/enable the Spring V2 producer only after the
-   FastAPI V2 consumer is healthy. The current Spring application publishes no V2 event.
+4. Keep the active Spring V2 producer enabled only while the FastAPI V2 consumer, worker, and
+   provider health checks are ready.
 
-The target renders both Compose files, starts `db` and `redis` without recreating them, then force-recreates `backend`, `worker`, `consumer`, and automatic `result-relay` with `--no-deps`; both commands pass `--no-build` and `--pull never`. Recreating only the runtime containers refreshes their attachment when the external Spring network was replaced while preserving PostgreSQL and the Redis/Celery broker container. The overlay expects the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. DemoFastAPI `db` and `redis` stay on the normal local network.
+The target renders both Compose files, starts `db`, `redis`, and the provider sidecar without
+recreating them, then force-recreates `backend`, `worker`, `consumer`, and automatic
+`result-relay` with `--no-deps`; both commands pass `--no-build` and `--pull never`. Recreating
+only the runtime containers refreshes their attachment when the external Spring network was
+replaced while preserving PostgreSQL and the Redis/Celery broker container. The overlay expects
+the Spring Compose network to exist as `${SPRING_INFRA_NETWORK:-infra_default}`. DemoFastAPI
+`db`, `redis`, and the provider stay on the normal local network.
 
 Container-side integration defaults in the overlay are:
 

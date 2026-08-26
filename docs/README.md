@@ -48,9 +48,9 @@ visibility timeout and produces at most one successor. The database status/expir
 Redis scheduling, remains the execution guard. YouTube V2 and yt-dlp acquisition are not part
 of the V1 command contract.
 
-### Dormant Kafka YouTube flow
+### Active Kafka YouTube flow
 
-1. A future Spring producer publishes an exact `asset.processing.requested` version 2 event to
+1. Spring publishes an exact `asset.processing.requested` version 2 event to
    `asset.processing.requested.v2` with `sourceType=YOUTUBE` and a validated video ID.
 2. The same Repo A consumer group validates the strict V2 payload, writes a source-shaped
    `processing_requests` row keyed by `eventId`, and dispatches `process_youtube_asset`.
@@ -63,9 +63,8 @@ of the V1 command contract.
    Cleanup removes the downloaded file on exit.
 6. Success or controlled failure stores the unchanged result V1 outbox intent.
 
-The V2 path is implemented but dormant because Spring does not publish it yet. It does not
-add a public endpoint, retain YouTube media, accept arbitrary URLs/cookies, or own product
-creation and duplicate policy.
+The V2 path is active. It does not add a public endpoint, retain YouTube media, accept arbitrary
+URLs/cookies, or own product creation and duplicate policy.
 
 ## Persistence boundary
 

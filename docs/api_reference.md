@@ -3,7 +3,7 @@
 This branch exposes only the processing-service contract that Repo B needs.
 
 Kafka consumption is internal to FastAPI and does not add a public HTTP API. The same
-consumer group reads object-storage `asset.processing.requested.v1` and dormant YouTube
+consumer group reads object-storage `asset.processing.requested.v1` and active YouTube
 `asset.processing.requested.v2`, validates each exact envelope, records idempotency by
 `eventId`, and dispatches the source-specific Celery task.
 
@@ -165,7 +165,7 @@ Production-grade service-to-service authentication and network policy are not im
 
 ## Internal Kafka intake
 
-- Topics: `asset.processing.requested.v1` and dormant
+- Topics: `asset.processing.requested.v1` and active
   `asset.processing.requested.v2`
 - Consumer group: `fastapi-processing-v1`
 - Delivery model: at-least-once
@@ -192,8 +192,8 @@ and `eventVersion=2`. Its strict payload is:
 ```
 
 The video ID is 1–64 characters from `[A-Za-z0-9_-]`. FastAPI constructs the canonical URL
-internally. The V2 consumer is dormant until Spring implements a producer; it creates no
-public YouTube API. Success and failure still emit only result V1.
+internally. Spring publishes the V2 request, but FastAPI creates no public YouTube API. Success
+and failure still emit only result V1.
 
 ## Internal result outbox contracts
 

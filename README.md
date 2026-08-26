@@ -14,7 +14,7 @@ frontend repositories.
 
 ## Active responsibility
 
-- consume object-storage `asset.processing.requested.v1` and dormant YouTube
+- consume object-storage `asset.processing.requested.v1` and active YouTube
   `asset.processing.requested.v2` events from Kafka for Spring-owned assets
 - retain the deprecated direct-upload endpoint for generic standalone and legacy callers; the current Spring product core does not call it
 - enqueue and run transcription processing
@@ -65,7 +65,7 @@ and uses pinned `yt-dlp` in a task-owned temporary directory. YouTube media is r
 success, controlled failure, timeout, or normal context cancellation and is never retained in
 MinIO or FastAPI persistent storage.
 
-The dormant V2 request uses the existing envelope naming with exact event type
+The active V2 request uses the existing envelope naming with exact event type
 `asset.processing.requested`, version `2`, aggregate metadata, and timestamps:
 
 ```json
@@ -89,8 +89,8 @@ The dormant V2 request uses the existing envelope naming with exact event type
 
 The V2 payload is strict: arbitrary URLs and object-storage fields are rejected. The video ID
 is bounded to 64 characters and permits only `A-Z`, `a-z`, `0-9`, `_`, and `-`. FastAPI does
-not enforce an exact 11-character shape because Spring has not yet frozen or implemented the
-canonical URL-normalization producer contract.
+not enforce an exact 11-character shape because the current cross-service contract permits the
+broader safe ID bound; submitted-URL normalization remains Spring-owned.
 
 Kafka-originated worker completion writes `processing_outbox_events` rows for internal result contracts:
 
@@ -212,10 +212,17 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
   `YOUTUBE_UNAVAILABLE`, `YOUTUBE_LIVE_NOT_SUPPORTED`,
   `YOUTUBE_DURATION_LIMIT_EXCEEDED`, `YOUTUBE_SIZE_LIMIT_EXCEEDED`,
   `YOUTUBE_ACQUISITION_TIMEOUT`, or `YOUTUBE_ACQUISITION_FAILED`.
-- The V2 consumer is implemented but dormant: Spring does not publish
-  `asset.processing.requested.v2` yet. Public YouTube product creation, canonical URL
-  normalization, authorization, and duplicate-product policy are not owned by this repository
-  or slice. Result events remain the unchanged V1 contract.
+- The active V2 acquisition strategy is pinned `yt-dlp 2026.08.19` with the `mweb` client and
+  pinned `bgutil-ytdlp-pot-provider 1.3.2`. The provider runs as the internal-only
+  `youtube-pot-provider` sidecar; the worker receives only its HTTP origin and never stores a PO
+  token. One fresh extraction/token attempt is allowed after a provider/transient/unknown
+  failure. Permanent failures are not retried, and format 18 is not an application fallback.
+- Spring currently publishes `asset.processing.requested.v2`. Public YouTube product creation,
+  URL normalization, authorization, and duplicate-product policy remain Spring-owned. Result
+  events retain the unchanged V1 contract.
+- Run `make youtube-live-canary` against an active provider to execute the explicit
+  `LIVE NETWORK TEST`; it downloads actual bytes from a small public-video set, removes its
+  temporary media, and exits non-zero on provider drift. It is not part of unit tests.
 - Lease expiry may permit duplicate external acquisition/transcription in extreme timing
   conditions, while attempt fencing and result-outbox idempotency protect terminal
   product/result effects.

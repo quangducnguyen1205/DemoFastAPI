@@ -14,7 +14,9 @@ from app.processing.domain.failures import (
     YouTubeAcquisitionError,
     YouTubeAcquisitionTimeoutError,
     YouTubeDurationLimitExceededError,
+    YouTubeGvsForbiddenError,
     YouTubeLiveNotSupportedError,
+    YouTubePoTokenProviderUnavailableError,
     YouTubeSizeLimitExceededError,
     YouTubeUnavailableError,
 )
@@ -41,6 +43,7 @@ class FakeYtDlpRunner:
         metadata: dict | None = None,
         metadata_result: YtDlpCommandResult | None = None,
         download_result: YtDlpCommandResult | None = None,
+        download_results: list[YtDlpCommandResult] | None = None,
         extra_download_file: bool = False,
         error: Exception | None = None,
     ) -> None:
@@ -52,6 +55,7 @@ class FakeYtDlpRunner:
         }
         self.metadata_result = metadata_result
         self.download_result = download_result
+        self.download_results = list(download_results or [])
         self.extra_download_file = extra_download_file
         self.error = error
         self.calls: list[dict] = []
@@ -85,12 +89,20 @@ class FakeYtDlpRunner:
             )
         if self.download_result is not None:
             return self.download_result
+        if self.download_results:
+            result = self.download_results.pop(0)
+            if result.returncode != 0:
+                return result
 
         media_path = owned_dir / "media.webm"
         media_path.write_bytes(b"downloaded media")
         if self.extra_download_file:
             (owned_dir / "media.info.json").write_text("{}", encoding="utf-8")
-        return YtDlpCommandResult(0, f"{media_path}\n", "")
+        return YtDlpCommandResult(
+            0,
+            f"SELECTED_FORMAT=251\nOUTPUT={media_path}\n",
+            "",
+        )
 
 
 def media_source(runner: FakeYtDlpRunner, **overrides) -> YouTubeProcessingMediaSource:
@@ -100,6 +112,8 @@ def media_source(runner: FakeYtDlpRunner, **overrides) -> YouTubeProcessingMedia
         "socket_timeout_seconds": 17,
         "acquisition_timeout_seconds": 120,
         "download_retries": 2,
+        "po_token_provider_url": "http://youtube-pot-provider:4416",
+        "retry_sleeper": lambda _seconds: None,
         "runner": runner,
     }
     options.update(overrides)
@@ -132,10 +146,12 @@ class YouTubeProcessingMediaSourceTest(unittest.TestCase):
         source = media_source(runner)
         with source.acquire(command()) as acquired_path:
             acquired = Path(acquired_path)
-            owned_dir = acquired.parent
+            attempt_dir = acquired.parent
+            owned_dir = attempt_dir.parent
             self.assertTrue(acquired.exists())
             self.assertEqual(acquired.name, "media.webm")
             self.assertIn("youtube_", owned_dir.name)
+            self.assertEqual(attempt_dir.name, "attempt-1")
             self.assertNotIn("provider-controlled-title", str(acquired))
 
         expected_url = YOUTUBE_CANONICAL_WATCH_URL.format(video_id=VIDEO_ID)
@@ -144,14 +160,24 @@ class YouTubeProcessingMediaSourceTest(unittest.TestCase):
             args = call["args"]
             self.assertEqual(args[-2:], ["--", expected_url])
             self.assertIn("--ignore-config", args)
-            self.assertIn("--no-plugin-dirs", args)
+            self.assertEqual(args[args.index("--plugin-dirs") + 1], "default")
             self.assertIn("--no-remote-components", args)
             self.assertIn("--no-playlist", args)
             self.assertIn("--no-cookies", args)
             self.assertIn("--no-cookies-from-browser", args)
+            extractor_args = [
+                args[index + 1]
+                for index, value in enumerate(args)
+                if value == "--extractor-args"
+            ]
+            self.assertIn("youtube:player_client=mweb", extractor_args)
+            self.assertIn(
+                "youtubepot-bgutilhttp:base_url=http://youtube-pot-provider:4416",
+                extractor_args,
+            )
         download_args = runner.calls[1]["args"]
         output_template = download_args[download_args.index("--output") + 1]
-        self.assertEqual(output_template, str(owned_dir / "media.%(ext)s"))
+        self.assertEqual(output_template, str(attempt_dir / "media.%(ext)s"))
         self.assertNotIn("title", output_template)
         self.assertFalse(owned_dir.exists())
 
@@ -176,6 +202,86 @@ class YouTubeProcessingMediaSourceTest(unittest.TestCase):
         self.assertLessEqual(
             max(call["timeout_seconds"] for call in runner.calls),
             120,
+        )
+
+    def test_gvs_403_gets_one_fresh_attempt_and_safe_observable_success(self) -> None:
+        signed_url = (
+            "https://example.googlevideo.com/videoplayback?sig=do-not-log"
+            "&pot=do-not-log"
+        )
+        runner = FakeYtDlpRunner(
+            download_results=[
+                YtDlpCommandResult(
+                    1,
+                    "",
+                    f"ERROR: HTTP Error 403: Forbidden {signed_url}",
+                )
+            ]
+        )
+
+        with self.assertLogs(
+            "app.processing.adapters.youtube_media_source",
+            level="INFO",
+        ) as captured:
+            with media_source(runner).acquire(command()) as media_path:
+                self.assertTrue(Path(media_path).exists())
+
+        self.assertEqual(len(runner.calls), 4)
+        self.assertNotEqual(runner.calls[0]["cwd"], runner.calls[2]["cwd"])
+        self.assertTrue(
+            any("youtube_acquisition_retry" in message for message in captured.output)
+        )
+        self.assertTrue(
+            any("error_family=youtube_gvs_forbidden" in message for message in captured.output)
+        )
+        self.assertTrue(
+            any("format_id=251" in message for message in captured.output)
+        )
+        safe_logs = "\n".join(captured.output)
+        self.assertNotIn("googlevideo.com", safe_logs)
+        self.assertNotIn("do-not-log", safe_logs)
+        self.assertTrue(all(not directory.exists() for directory in runner.owned_directories))
+
+    def test_provider_unavailable_exhausts_once_without_format18_fallback(self) -> None:
+        runner = FakeYtDlpRunner(
+            download_result=YtDlpCommandResult(
+                1,
+                "",
+                "ERROR: Could not reach bgutil HTTP server; token=do-not-log",
+            )
+        )
+
+        with (
+            self.assertLogs(
+                "app.processing.adapters.youtube_media_source",
+                level="WARNING",
+            ) as captured,
+            self.assertRaises(YouTubePoTokenProviderUnavailableError),
+        ):
+            with media_source(runner).acquire(command()):
+                pass
+
+        self.assertEqual(len(runner.calls), 4)
+        download_calls = [call for call in runner.calls if "--format" in call["args"]]
+        self.assertEqual(len(download_calls), 2)
+        self.assertTrue(
+            all(
+                call["args"][call["args"].index("--format") + 1]
+                == "bestaudio/best"
+                for call in download_calls
+            )
+        )
+        safe_logs = "\n".join(captured.output)
+        self.assertIn("youtube_pot_provider_unavailable", safe_logs)
+        self.assertIn("youtube_acquisition_terminal_failure", safe_logs)
+        self.assertNotIn("do-not-log", safe_logs)
+        self.assertTrue(all(not directory.exists() for directory in runner.owned_directories))
+
+    def test_gvs_and_provider_failures_keep_the_external_generic_error_code(self) -> None:
+        self.assertEqual(YouTubeGvsForbiddenError.code, "YOUTUBE_ACQUISITION_FAILED")
+        self.assertEqual(
+            YouTubePoTokenProviderUnavailableError.code,
+            "YOUTUBE_ACQUISITION_FAILED",
         )
 
     def test_duration_size_and_live_metadata_are_controlled_failures(self) -> None:
@@ -228,7 +334,21 @@ class YouTubeProcessingMediaSourceTest(unittest.TestCase):
             str(unavailable_context.exception),
             "YouTube video is unavailable for public unauthenticated acquisition",
         )
+        self.assertEqual(len(unavailable.calls), 1)
         self.assertFalse(unavailable.owned_directories[0].exists())
+
+        removed = FakeYtDlpRunner(
+            metadata_result=YtDlpCommandResult(
+                1,
+                "",
+                "ERROR: This video is unavailable",
+            )
+        )
+        with self.assertRaises(YouTubeUnavailableError):
+            with media_source(removed).acquire(command()):
+                pass
+        self.assertEqual(len(removed.calls), 1)
+        self.assertFalse(removed.owned_directories[0].exists())
 
         timeout = FakeYtDlpRunner(error=YouTubeAcquisitionTimeoutError())
         with self.assertRaises(YouTubeAcquisitionTimeoutError):
@@ -252,7 +372,11 @@ class YouTubeProcessingMediaSourceTest(unittest.TestCase):
                 self.owned_directories.append(owned_dir)
                 media_path = owned_dir / "media.webm"
                 media_path.write_bytes(b"x" * 1_025)
-                return YtDlpCommandResult(0, f"{media_path}\n", "")
+                return YtDlpCommandResult(
+                    0,
+                    f"SELECTED_FORMAT=251\nOUTPUT={media_path}\n",
+                    "",
+                )
 
         oversized = OversizeRunner()
         with self.assertRaises(YouTubeSizeLimitExceededError):
@@ -275,12 +399,24 @@ class YouTubeProcessingMediaSourceTest(unittest.TestCase):
                 raise RuntimeError("transcriber cancelled")
         self.assertFalse(successful.owned_directories[0].exists())
 
+        cancelled = FakeYtDlpRunner()
+        with self.assertRaises(KeyboardInterrupt):
+            with media_source(cancelled).acquire(command()):
+                raise KeyboardInterrupt()
+        self.assertTrue(
+            all(not directory.exists() for directory in cancelled.owned_directories)
+        )
+
     def test_output_outside_owned_directory_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="youtube_test_outside_") as outside:
             outside_path = Path(outside) / "media.webm"
             outside_path.write_bytes(b"outside")
             runner = FakeYtDlpRunner(
-                download_result=YtDlpCommandResult(0, f"{outside_path}\n", "")
+                download_result=YtDlpCommandResult(
+                    0,
+                    f"SELECTED_FORMAT=251\nOUTPUT={outside_path}\n",
+                    "",
+                )
             )
             with self.assertRaises(YouTubeAcquisitionError):
                 with media_source(runner).acquire(command()):

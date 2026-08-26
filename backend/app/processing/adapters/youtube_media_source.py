@@ -2,20 +2,27 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
+import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Protocol
+from typing import Callable, Protocol
 
 from app.processing.domain.failures import (
     YouTubeAcquisitionError,
     YouTubeAcquisitionTimeoutError,
     YouTubeDurationLimitExceededError,
+    YouTubeGvsForbiddenError,
     YouTubeLiveNotSupportedError,
+    YouTubeNetworkTransientError,
+    YouTubePoTokenProviderUnavailableError,
+    YouTubeRateLimitedError,
     YouTubeSizeLimitExceededError,
     YouTubeUnavailableError,
 )
@@ -23,11 +30,16 @@ from app.processing.domain.models import YouTubeProcessingExecutionCommand
 
 
 YOUTUBE_CANONICAL_WATCH_URL = "https://www.youtube.com/watch?v={video_id}"
+YOUTUBE_ACQUISITION_STRATEGY = "mweb_bgutil_http"
 _METADATA_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024
 _COMMAND_OUTPUT_LIMIT_BYTES = 64 * 1024
+_FRESH_ACQUISITION_ATTEMPTS = 2
+_FRESH_RETRY_BACKOFF_SECONDS = 1.0
 _UNAVAILABLE_MARKERS = (
     "private video",
     "video unavailable",
+    "video is unavailable",
+    "live stream recording is not available",
     "video has been removed",
     "not available in your country",
     "geo restricted",
@@ -36,6 +48,28 @@ _UNAVAILABLE_MARKERS = (
     "members-only",
     "copyright",
 )
+_PROVIDER_UNAVAILABLE_MARKERS = (
+    "could not reach bgutil http server",
+    "bgutil http server is not available",
+    "error reaching post /get_pot",
+    "http error reaching get /ping",
+    "unknown error reaching get /ping",
+    "error reaching po token provider",
+    "po token provider is not available",
+    "po token provider unavailable",
+)
+_NETWORK_TRANSIENT_MARKERS = (
+    "connection reset",
+    "connection refused",
+    "connection aborted",
+    "temporary failure",
+    "network is unreachable",
+    "remote end closed connection",
+    "timed out",
+    "timeout",
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -139,14 +173,18 @@ class YouTubeProcessingMediaSource:
         socket_timeout_seconds: int,
         acquisition_timeout_seconds: int,
         download_retries: int,
+        po_token_provider_url: str,
         runner: YtDlpCommandRunner | None = None,
+        retry_sleeper: Callable[[float], None] | None = None,
     ) -> None:
         self._max_duration_seconds = max_duration_seconds
         self._max_file_size_bytes = max_file_size_bytes
         self._socket_timeout_seconds = socket_timeout_seconds
         self._acquisition_timeout_seconds = acquisition_timeout_seconds
         self._download_retries = download_retries
+        self._po_token_provider_url = po_token_provider_url
         self._runner = runner or SubprocessYtDlpCommandRunner()
+        self._retry_sleeper = retry_sleeper or time.sleep
 
     @contextmanager
     def acquire(self, command: YouTubeProcessingExecutionCommand):
@@ -158,18 +196,65 @@ class YouTubeProcessingMediaSource:
             canonical_url = YOUTUBE_CANONICAL_WATCH_URL.format(
                 video_id=command.youtube_video_id
             )
-            metadata = self._read_metadata(
-                command,
-                canonical_url=canonical_url,
-                owned_dir=owned_dir,
-                deadline=deadline,
+            logger.info(
+                "youtube_acquisition_strategy video_id=%s strategy=%s max_attempts=%s",
+                command.youtube_video_id,
+                YOUTUBE_ACQUISITION_STRATEGY,
+                _FRESH_ACQUISITION_ATTEMPTS,
             )
-            self._validate_metadata(command, metadata)
-            media_path = self._download(
-                canonical_url=canonical_url,
-                owned_dir=owned_dir,
-                deadline=deadline,
-            )
+            media_path: Path | None = None
+            for attempt in range(1, _FRESH_ACQUISITION_ATTEMPTS + 1):
+                attempt_dir = owned_dir / f"attempt-{attempt}"
+                attempt_dir.mkdir()
+                try:
+                    metadata = self._read_metadata(
+                        command,
+                        canonical_url=canonical_url,
+                        owned_dir=attempt_dir,
+                        deadline=deadline,
+                        attempt=attempt,
+                    )
+                    self._validate_metadata(command, metadata)
+                    media_path, selected_format = self._download(
+                        video_id=command.youtube_video_id,
+                        canonical_url=canonical_url,
+                        owned_dir=attempt_dir,
+                        deadline=deadline,
+                        attempt=attempt,
+                    )
+                    logger.info(
+                        "youtube_acquisition_success video_id=%s strategy=%s attempt=%s format_id=%s",
+                        command.youtube_video_id,
+                        YOUTUBE_ACQUISITION_STRATEGY,
+                        attempt,
+                        selected_format,
+                    )
+                    break
+                except YouTubeAcquisitionError as exc:
+                    if exc.retryable and attempt < _FRESH_ACQUISITION_ATTEMPTS:
+                        logger.warning(
+                            "youtube_acquisition_retry video_id=%s strategy=%s attempt=%s error_family=%s",
+                            command.youtube_video_id,
+                            YOUTUBE_ACQUISITION_STRATEGY,
+                            attempt,
+                            exc.diagnostic_family,
+                        )
+                        shutil.rmtree(attempt_dir, ignore_errors=True)
+                        remaining = _remaining_timeout(deadline)
+                        self._retry_sleeper(
+                            min(_FRESH_RETRY_BACKOFF_SECONDS, remaining)
+                        )
+                        continue
+                    logger.warning(
+                        "youtube_acquisition_terminal_failure video_id=%s strategy=%s attempt=%s error_family=%s",
+                        command.youtube_video_id,
+                        YOUTUBE_ACQUISITION_STRATEGY,
+                        attempt,
+                        exc.diagnostic_family,
+                    )
+                    raise
+            if media_path is None:  # pragma: no cover - every loop path succeeds or raises
+                raise YouTubeAcquisitionError()
             yield str(media_path)
 
     def _base_args(self) -> list[str]:
@@ -179,7 +264,8 @@ class YouTubeProcessingMediaSource:
             "-m",
             "yt_dlp",
             "--ignore-config",
-            "--no-plugin-dirs",
+            "--plugin-dirs",
+            "default",
             "--no-remote-components",
             "--no-cache-dir",
             "--no-cookies",
@@ -188,7 +274,6 @@ class YouTubeProcessingMediaSource:
             "--abort-on-error",
             "--no-wait-for-video",
             "--no-progress",
-            "--no-warnings",
             "--socket-timeout",
             str(self._socket_timeout_seconds),
             "--retries",
@@ -199,6 +284,10 @@ class YouTubeProcessingMediaSource:
             retries,
             "--file-access-retries",
             retries,
+            "--extractor-args",
+            "youtube:player_client=mweb",
+            "--extractor-args",
+            f"youtubepot-bgutilhttp:base_url={self._po_token_provider_url}",
         ]
 
     def _read_metadata(
@@ -208,6 +297,7 @@ class YouTubeProcessingMediaSource:
         canonical_url: str,
         owned_dir: Path,
         deadline: float,
+        attempt: int,
     ) -> dict:
         result = self._runner.run(
             [
@@ -220,6 +310,11 @@ class YouTubeProcessingMediaSource:
             timeout_seconds=_remaining_timeout(deadline),
             cwd=owned_dir,
             output_limit_bytes=_METADATA_OUTPUT_LIMIT_BYTES,
+        )
+        self._raise_for_provider_diagnostic(
+            result,
+            video_id=command.youtube_video_id,
+            attempt=attempt,
         )
         self._raise_for_command_failure(result)
         try:
@@ -260,10 +355,12 @@ class YouTubeProcessingMediaSource:
     def _download(
         self,
         *,
+        video_id: str,
         canonical_url: str,
         owned_dir: Path,
         deadline: float,
-    ) -> Path:
+        attempt: int,
+    ) -> tuple[Path, str]:
         output_template = str(owned_dir / "media.%(ext)s")
         result = self._runner.run(
             [
@@ -275,7 +372,9 @@ class YouTubeProcessingMediaSource:
                 "--output",
                 output_template,
                 "--print",
-                "after_move:filepath",
+                "before_dl:SELECTED_FORMAT=%(format_id)s",
+                "--print",
+                "after_move:OUTPUT=%(filepath)s",
                 "--no-simulate",
                 "--",
                 canonical_url,
@@ -283,6 +382,11 @@ class YouTubeProcessingMediaSource:
             timeout_seconds=_remaining_timeout(deadline),
             cwd=owned_dir,
             max_directory_size=self._max_file_size_bytes,
+        )
+        self._raise_for_provider_diagnostic(
+            result,
+            video_id=video_id,
+            attempt=attempt,
         )
         self._raise_for_command_failure(result)
         return _select_downloaded_file(
@@ -300,7 +404,33 @@ class YouTubeProcessingMediaSource:
             raise YouTubeSizeLimitExceededError()
         if any(marker in normalized_error for marker in _UNAVAILABLE_MARKERS):
             raise YouTubeUnavailableError()
+        if _provider_is_unavailable(normalized_error):
+            raise YouTubePoTokenProviderUnavailableError()
+        if "http error 403" in normalized_error or "403: forbidden" in normalized_error:
+            raise YouTubeGvsForbiddenError()
+        if "http error 429" in normalized_error or "too many requests" in normalized_error:
+            raise YouTubeRateLimitedError()
+        if re.search(r"http error 5\d\d", normalized_error) or any(
+            marker in normalized_error for marker in _NETWORK_TRANSIENT_MARKERS
+        ):
+            raise YouTubeNetworkTransientError()
         raise YouTubeAcquisitionError()
+
+    @staticmethod
+    def _raise_for_provider_diagnostic(
+        result: YtDlpCommandResult,
+        *,
+        video_id: str,
+        attempt: int,
+    ) -> None:
+        if _provider_is_unavailable(result.stderr.lower()):
+            logger.warning(
+                "youtube_pot_provider_unavailable video_id=%s strategy=%s attempt=%s",
+                video_id,
+                YOUTUBE_ACQUISITION_STRATEGY,
+                attempt,
+            )
+            raise YouTubePoTokenProviderUnavailableError()
 
 
 def _remaining_timeout(deadline: float) -> float:
@@ -321,6 +451,17 @@ def _directory_size_bytes(directory: Path) -> int:
     return total
 
 
+def _provider_is_unavailable(normalized_error: str) -> bool:
+    if any(marker in normalized_error for marker in _PROVIDER_UNAVAILABLE_MARKERS):
+        return True
+    if "error reaching get " in normalized_error and "/ping" in normalized_error:
+        return True
+    return "po token provider" in normalized_error and any(
+        marker in normalized_error
+        for marker in ("not available", "unavailable", "failed", "error")
+    )
+
+
 def _read_bounded_text(file_object, limit_bytes: int) -> str:
     file_object.seek(0)
     output = file_object.read(limit_bytes + 1)
@@ -334,11 +475,27 @@ def _select_downloaded_file(
     stdout: str,
     *,
     max_file_size_bytes: int,
-) -> Path:
+) -> tuple[Path, str]:
     output_lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if len(output_lines) != 1:
+    selected_formats = [
+        line.removeprefix("SELECTED_FORMAT=")
+        for line in output_lines
+        if line.startswith("SELECTED_FORMAT=")
+    ]
+    output_paths = [
+        line.removeprefix("OUTPUT=")
+        for line in output_lines
+        if line.startswith("OUTPUT=")
+    ]
+    if (
+        len(output_lines) != 2
+        or len(selected_formats) != 1
+        or not selected_formats[0]
+        or len(output_paths) != 1
+        or not output_paths[0]
+    ):
         raise YouTubeAcquisitionError()
-    raw_candidate = Path(output_lines[0])
+    raw_candidate = Path(output_paths[0])
     if raw_candidate.is_symlink():
         raise YouTubeAcquisitionError()
     candidate = raw_candidate.resolve()
@@ -356,4 +513,4 @@ def _select_downloaded_file(
         raise YouTubeAcquisitionError()
     if candidate.stat().st_size > max_file_size_bytes:
         raise YouTubeSizeLimitExceededError()
-    return candidate
+    return candidate, selected_formats[0]

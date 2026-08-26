@@ -17,6 +17,8 @@ YOUTUBE_ACQUISITION_FAILED = "YOUTUBE_ACQUISITION_FAILED"
 class YouTubeAcquisitionError(RuntimeError):
     code = YOUTUBE_ACQUISITION_FAILED
     safe_message = "YouTube media acquisition failed"
+    diagnostic_family = "youtube_acquisition_unknown"
+    retryable = True
 
     def __init__(self) -> None:
         super().__init__(self.safe_message)
@@ -25,26 +27,52 @@ class YouTubeAcquisitionError(RuntimeError):
 class YouTubeUnavailableError(YouTubeAcquisitionError):
     code = YOUTUBE_UNAVAILABLE
     safe_message = "YouTube video is unavailable for public unauthenticated acquisition"
+    diagnostic_family = "youtube_unavailable"
+    retryable = False
 
 
 class YouTubeLiveNotSupportedError(YouTubeAcquisitionError):
     code = YOUTUBE_LIVE_NOT_SUPPORTED
     safe_message = "Active or upcoming YouTube livestreams are not supported"
+    diagnostic_family = "youtube_live_not_supported"
+    retryable = False
 
 
 class YouTubeDurationLimitExceededError(YouTubeAcquisitionError):
     code = YOUTUBE_DURATION_LIMIT_EXCEEDED
     safe_message = "YouTube video exceeds the configured duration limit"
+    diagnostic_family = "youtube_duration_limit_exceeded"
+    retryable = False
 
 
 class YouTubeSizeLimitExceededError(YouTubeAcquisitionError):
     code = YOUTUBE_SIZE_LIMIT_EXCEEDED
     safe_message = "YouTube media exceeds the configured file-size limit"
+    diagnostic_family = "youtube_size_limit_exceeded"
+    retryable = False
 
 
 class YouTubeAcquisitionTimeoutError(YouTubeAcquisitionError):
     code = YOUTUBE_ACQUISITION_TIMEOUT
     safe_message = "YouTube media acquisition exceeded the configured timeout"
+    diagnostic_family = "youtube_acquisition_timeout"
+    retryable = False
+
+
+class YouTubePoTokenProviderUnavailableError(YouTubeAcquisitionError):
+    diagnostic_family = "youtube_pot_provider_unavailable"
+
+
+class YouTubeGvsForbiddenError(YouTubeAcquisitionError):
+    diagnostic_family = "youtube_gvs_forbidden"
+
+
+class YouTubeRateLimitedError(YouTubeAcquisitionError):
+    diagnostic_family = "youtube_rate_limited"
+
+
+class YouTubeNetworkTransientError(YouTubeAcquisitionError):
+    diagnostic_family = "youtube_network_transient"
 
 
 def processing_failure_details(exc: Exception) -> tuple[str, str]:

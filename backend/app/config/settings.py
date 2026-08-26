@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -74,6 +75,30 @@ def _env_bool(name: str, default: bool) -> bool:
     if val is None:
         return default
     return val.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_http_endpoint(name: str, default: str) -> str:
+    value = _env(name, default)
+    assert value is not None
+    parsed = urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} must contain a valid port") from exc
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or port is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError(
+            f"{name} must be an HTTP origin with an explicit port and no credentials, path, query, or fragment"
+        )
+    return value.rstrip("/")
 
 
 def _is_docker() -> bool:
@@ -191,7 +216,11 @@ class Settings:
     )
     OBJECT_STORAGE_REGION: str = _env("OBJECT_STORAGE_REGION", "us-east-1")
 
-    # Temporary public YouTube acquisition for dormant Kafka V2 processing.
+    # Temporary public YouTube acquisition for active Kafka V2 processing.
+    YOUTUBE_PO_TOKEN_PROVIDER_URL: str = _env_http_endpoint(
+        "YOUTUBE_PO_TOKEN_PROVIDER_URL",
+        "http://youtube-pot-provider:4416",
+    )
     YOUTUBE_MAX_DURATION_SECONDS: int = _env_bounded_positive_int(
         "YOUTUBE_MAX_DURATION_SECONDS",
         7_200,

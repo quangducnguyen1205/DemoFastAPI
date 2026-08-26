@@ -45,6 +45,7 @@ def build_youtube_processing_execution_service() -> ExecuteProcessingApplication
             socket_timeout_seconds=settings.YOUTUBE_SOCKET_TIMEOUT_SECONDS,
             acquisition_timeout_seconds=settings.YOUTUBE_ACQUISITION_TIMEOUT_SECONDS,
             download_retries=settings.YOUTUBE_DOWNLOAD_RETRIES,
+            po_token_provider_url=settings.YOUTUBE_PO_TOKEN_PROVIDER_URL,
         ),
         transcriber=WhisperProcessingTranscriptionProvider(),
         artifact_store=store,
