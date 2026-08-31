@@ -1,3 +1,4 @@
+import subprocess
 import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -14,8 +15,12 @@ from app.processing.adapters.celery_dispatcher import (
     CeleryProcessingTaskDispatcher,
     encode_processing_task_payload,
 )
+from app.processing.adapters.whisper_transcriber import WhisperProcessingTranscriptionProvider
 from app.processing.application.dispatch import DispatchProcessingApplicationService
-from app.processing.application.execute import ExecuteProcessingApplicationService
+from app.processing.application.execute import (
+    ExecuteDirectUploadProcessingApplicationService,
+    ExecuteProcessingApplicationService,
+)
 from app.processing.domain.models import (
     ProcessingClaimConflict,
     ProcessingExecutionCommand,
@@ -215,6 +220,126 @@ class ExecuteProcessingApplicationServiceTest(unittest.TestCase):
         transcriber.transcribe.assert_not_called()
         sink.record.assert_not_called()
         store.commit.assert_not_called()
+
+
+class WhisperFailurePropagationTest(unittest.TestCase):
+    """A failure inside the real Whisper transcription stage must reach the controlled
+    failure path instead of being converted into an empty successful transcript."""
+
+    def build_real_provider_service(self):
+        store = MagicMock()
+        sink = MagicMock()
+
+        class MediaSource:
+            @contextmanager
+            def acquire(self, _command):
+                yield "/tmp/media.mp4"
+
+        fixed_now = datetime(2026, 7, 13, tzinfo=UTC)
+        store.claim.return_value = ProcessingLease(1, fixed_now, fixed_now + timedelta(hours=4))
+        service = ExecuteProcessingApplicationService(
+            media_source=MediaSource(),
+            transcriber=WhisperProcessingTranscriptionProvider(),
+            artifact_store=store,
+            result_sink=sink,
+            clock=lambda: fixed_now,
+        )
+        return service, store, sink
+
+    @contextmanager
+    def whisper_model(self, model):
+        with (
+            patch(
+                "app.processing.adapters.whisper_transcriber.extract_audio_to_wav",
+                return_value="/tmp/audio.wav",
+            ),
+            patch("app.services.video_processing.get_whisper_model", return_value=model),
+        ):
+            yield
+
+    def test_whisper_internal_exception_reaches_the_controlled_failure_path(self) -> None:
+        service, store, sink = self.build_real_provider_service()
+        model = MagicMock()
+        model.transcribe.side_effect = RuntimeError("whisper backend crashed")
+        with self.whisper_model(model):
+            outcome = service.execute(command(), task_id="task-1")
+        self.assertIsInstance(outcome, ProcessingFailed)
+        self.assertEqual(outcome.failure.code, "PROCESSING_FAILED")
+        store.rollback.assert_called_once_with()
+        store.persist_failure.assert_called_once_with(outcome, attempt_count=1)
+        sink.record.assert_called_once_with(outcome)
+        store.commit.assert_called_once_with()
+
+    def test_whisper_internal_exception_cannot_become_an_empty_success(self) -> None:
+        service, store, sink = self.build_real_provider_service()
+        model = MagicMock()
+        model.transcribe.side_effect = RuntimeError("whisper backend crashed")
+        with self.whisper_model(model):
+            outcome = service.execute(command())
+        self.assertNotIsInstance(outcome, ProcessingSucceeded)
+        store.persist_success.assert_not_called()
+        recorded = [call.args[0] for call in sink.record.call_args_list]
+        self.assertFalse(any(isinstance(result, ProcessingSucceeded) for result in recorded))
+
+    def test_normal_whisper_success_still_succeeds_through_the_real_provider(self) -> None:
+        service, store, sink = self.build_real_provider_service()
+        model = MagicMock()
+        model.transcribe.return_value = {
+            "text": "first second",
+            "segments": [
+                {"text": " first ", "start": 0.0, "end": 1.25},
+                {"text": "second", "start": 1.25, "end": 2.5},
+            ],
+        }
+        with self.whisper_model(model):
+            outcome = service.execute(command())
+        self.assertIsInstance(outcome, ProcessingSucceeded)
+        self.assertEqual([row.text for row in outcome.artifact.rows], ["first", "second"])
+        store.persist_success.assert_called_once_with(outcome, attempt_count=1)
+        sink.record.assert_called_once_with(outcome)
+
+    def test_successful_zero_segment_transcription_remains_a_success(self) -> None:
+        service, store, sink = self.build_real_provider_service()
+        model = MagicMock()
+        model.transcribe.return_value = {"text": "", "segments": []}
+        with self.whisper_model(model):
+            outcome = service.execute(command())
+        self.assertIsInstance(outcome, ProcessingSucceeded)
+        self.assertEqual(outcome.artifact.segment_count, 0)
+        store.persist_success.assert_called_once_with(outcome, attempt_count=1)
+        sink.record.assert_called_once_with(outcome)
+
+    def test_preprocessing_failure_still_fails_before_whisper_runs(self) -> None:
+        service, store, sink = self.build_real_provider_service()
+        model = MagicMock()
+        with (
+            patch(
+                "app.processing.adapters.whisper_transcriber.extract_audio_to_wav",
+                side_effect=subprocess.CalledProcessError(1, ["ffmpeg"]),
+            ),
+            patch("app.services.video_processing.get_whisper_model", return_value=model),
+        ):
+            outcome = service.execute(command())
+        self.assertIsInstance(outcome, ProcessingFailed)
+        self.assertEqual(outcome.failure.code, "PROCESSING_FAILED")
+        model.transcribe.assert_not_called()
+        store.persist_failure.assert_called_once_with(outcome, attempt_count=1)
+        sink.record.assert_called_once_with(outcome)
+
+    def test_direct_upload_whisper_exception_marks_failed_not_ready(self) -> None:
+        store = MagicMock()
+        store.exists.return_value = True
+        service = ExecuteDirectUploadProcessingApplicationService(
+            transcriber=WhisperProcessingTranscriptionProvider(),
+            artifact_store=store,
+        )
+        model = MagicMock()
+        model.transcribe.side_effect = RuntimeError("whisper backend crashed")
+        with self.whisper_model(model):
+            result = service.execute(video_id=7, media_path="/tmp/media.mp4", task_id="task-1")
+        self.assertEqual(result["status"], "failed")
+        store.persist_ready.assert_not_called()
+        store.persist_failed.assert_called_once_with(7)
 
 
 class CeleryWorkerAdapterTest(unittest.TestCase):

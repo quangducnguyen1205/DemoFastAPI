@@ -1,4 +1,5 @@
 import math
+import os
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -48,6 +49,41 @@ class WhisperTimestampNormalizationTest(unittest.TestCase):
             normalize_whisper_result({"segments": [{"text": "partial", "start": 1.0}]})
         with self.assertRaisesRegex(ValueError, "must not precede"):
             normalize_whisper_result({"segments": [{"text": "backward", "start": 2.0, "end": 1.0}]})
+
+    def test_normalization_rejects_a_missing_transcription_result(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be an object"):
+            normalize_whisper_result(None)
+
+    def test_successful_empty_whisper_result_normalizes_to_zero_rows(self) -> None:
+        self.assertEqual(normalize_whisper_result({"text": "", "segments": []}), ())
+        self.assertEqual(normalize_whisper_result({"text": " ", "segments": None}), ())
+
+    def test_whisper_exception_cleans_temporary_audio_and_propagates(self) -> None:
+        captured: list[str] = []
+
+        def fake_extract(_media_path: str, temp_dir: str) -> str:
+            audio_path = os.path.join(temp_dir, "audio.wav")
+            with open(audio_path, "w", encoding="utf-8") as audio_file:
+                audio_file.write("wav")
+            captured.append(audio_path)
+            return audio_path
+
+        with (
+            patch(
+                "app.processing.adapters.whisper_transcriber.extract_audio_to_wav",
+                side_effect=fake_extract,
+            ),
+            patch(
+                "app.services.video_processing.get_whisper_model",
+                side_effect=RuntimeError("whisper backend crashed"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "whisper backend crashed"),
+        ):
+            WhisperProcessingTranscriptionProvider().transcribe("/tmp/media.mp4")
+
+        self.assertEqual(len(captured), 1)
+        self.assertFalse(os.path.exists(captured[0]))
+        self.assertFalse(os.path.isdir(os.path.dirname(captured[0])))
 
     def test_whisper_adapter_preserves_provider_segments_and_normalizes_once(self) -> None:
         result = {

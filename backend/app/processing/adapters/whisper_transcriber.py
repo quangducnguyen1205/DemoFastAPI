@@ -25,9 +25,9 @@ def seconds_to_milliseconds(value: object | None) -> int | None:
     return round(seconds * 1000)
 
 
-def normalize_whisper_result(result: dict[str, Any] | None) -> tuple[ProcessingTranscriptRow, ...]:
-    if result is None:
-        return ()
+def normalize_whisper_result(result: dict[str, Any]) -> tuple[ProcessingTranscriptRow, ...]:
+    if not isinstance(result, dict):
+        raise ValueError("Whisper transcription result must be an object")
 
     raw_segments = result.get("segments")
     if raw_segments is None or raw_segments == []:
