@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.routing import APIRoute
 
 from app.bootstrap.api import create_api_app
+from app.config.settings import settings
 from app.bootstrap.consumer import build_processing_dispatch_service
 from app.bootstrap.relay import (
     build_result_reconciliation_service,
@@ -216,6 +217,217 @@ class KafkaConsumerCommitSemanticsTest(unittest.TestCase):
         consumer.commit.assert_not_called()
         consumer.close.assert_called_once_with()
         db.close.assert_called_once_with()
+
+
+def _record(offset: int, value: bytes, *, topic: str = "asset.processing.requested.v1"):
+    return SimpleNamespace(topic=topic, partition=0, offset=offset, value=value)
+
+
+def _accepted(*, duplicate: bool = False) -> asset_processing_consumer.MessageHandlingResult:
+    return asset_processing_consumer.MessageHandlingResult(
+        accepted=True,
+        duplicate=duplicate,
+        rejected=False,
+        event_id="event-1",
+        celery_task_id="asset-processing-event-1",
+    )
+
+
+def _rejected(reason: str) -> asset_processing_consumer.MessageHandlingResult:
+    return asset_processing_consumer.MessageHandlingResult(
+        accepted=False,
+        duplicate=False,
+        rejected=True,
+        reason=reason,
+    )
+
+
+class _FakeKafkaBroker:
+    def __init__(self, records) -> None:
+        self.records = list(records)
+        self.committed: dict[tuple[str, int], int] = {}
+
+
+class _FakeKafkaConsumer:
+    """Deterministic model of the kafka-python surface run_forever depends on.
+
+    Iteration yields records while advancing the local position to offset + 1, as
+    KafkaConsumer._message_generator_v2 does; commit() with no arguments commits every
+    tracked position, as SubscriptionState.all_consumed_offsets does; close() never
+    commits because the application configures enable_auto_commit=False; and a fresh
+    instance resumes from the broker's committed offsets, as a rejoining group member
+    does. Unlike the real client, iteration ends once the queued records are exhausted
+    so tests terminate instead of blocking.
+    """
+
+    def __init__(self, broker: _FakeKafkaBroker, *, commit_error: Exception | None = None) -> None:
+        self._broker = broker
+        self._positions: dict[tuple[str, int], int] = {}
+        self._commit_error = commit_error
+        self.commits: list[dict[tuple[str, int], int]] = []
+        self.closed = False
+
+    def __iter__(self):
+        for record in self._broker.records:
+            partition = (record.topic, record.partition)
+            if record.offset < self._broker.committed.get(partition, 0):
+                continue
+            self._positions[partition] = record.offset + 1
+            yield record
+
+    def commit(self) -> None:
+        if self._commit_error is not None:
+            error, self._commit_error = self._commit_error, None
+            raise error
+        self.commits.append(dict(self._positions))
+        self._broker.committed.update(self._positions)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class KafkaOffsetProgressionTest(unittest.TestCase):
+    PARTITION = ("asset.processing.requested.v1", 0)
+
+    def _run(self, runner, consumers, handler, sleeper):
+        with (
+            patch.object(runner, "build_consumer", side_effect=list(consumers)),
+            patch.object(asset_processing_consumer, "SessionLocal", return_value=MagicMock()),
+            patch.object(
+                asset_processing_consumer,
+                "handle_asset_processing_message",
+                side_effect=handler,
+            ),
+            patch.object(asset_processing_consumer.time, "sleep", side_effect=sleeper),
+        ):
+            runner.run_forever()
+
+    def test_failed_handoff_stops_consumption_before_a_later_commit_can_skip_it(self) -> None:
+        broker = _FakeKafkaBroker([_record(100, b"offset-100"), _record(101, b"offset-101")])
+        consumer = _FakeKafkaConsumer(broker)
+        runner = asset_processing_consumer.AssetProcessingKafkaConsumer()
+        handed_off: list[bytes] = []
+        sleeps: list[int] = []
+
+        def handler(value, _db, _topic):
+            handed_off.append(value)
+            if value == b"offset-100":
+                raise RuntimeError("transient handoff failure")
+            return _accepted()
+
+        def sleep_and_stop(seconds):
+            sleeps.append(seconds)
+            runner.stop()
+
+        self._run(runner, [consumer], handler, sleep_and_stop)
+
+        self.assertEqual(handed_off, [b"offset-100"])
+        self.assertEqual(consumer.commits, [])
+        self.assertEqual(broker.committed, {})
+        self.assertTrue(consumer.closed)
+        self.assertEqual(sleeps, [settings.KAFKA_RECONNECT_BACKOFF_SECONDS])
+
+    def test_uncommitted_record_is_redelivered_and_committed_on_the_next_run(self) -> None:
+        broker = _FakeKafkaBroker([_record(100, b"offset-100")])
+        first_run = _FakeKafkaConsumer(broker)
+        second_run = _FakeKafkaConsumer(broker)
+        runner = asset_processing_consumer.AssetProcessingKafkaConsumer()
+        attempts: list[bytes] = []
+        sleeps: list[int] = []
+
+        def handler(value, _db, _topic):
+            attempts.append(value)
+            if len(attempts) == 1:
+                raise RuntimeError("transient handoff failure")
+            runner.stop()
+            return _accepted()
+
+        def sleep_with_runaway_guard(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) > 1:
+                runner.stop()
+
+        self._run(runner, [first_run, second_run], handler, sleep_with_runaway_guard)
+
+        self.assertEqual(attempts, [b"offset-100", b"offset-100"])
+        self.assertEqual(first_run.commits, [])
+        self.assertEqual(second_run.commits, [{self.PARTITION: 101}])
+        self.assertEqual(broker.committed, {self.PARTITION: 101})
+        self.assertTrue(first_run.closed)
+        self.assertTrue(second_run.closed)
+        self.assertEqual(sleeps, [settings.KAFKA_RECONNECT_BACKOFF_SECONDS])
+
+    def test_successful_handoffs_commit_every_consumed_position(self) -> None:
+        broker = _FakeKafkaBroker([_record(100, b"offset-100"), _record(101, b"offset-101")])
+        consumer = _FakeKafkaConsumer(broker)
+        runner = asset_processing_consumer.AssetProcessingKafkaConsumer()
+        handed_off: list[bytes] = []
+        sleeps: list[int] = []
+
+        def handler(value, _db, _topic):
+            handed_off.append(value)
+            if value == b"offset-101":
+                runner.stop()
+            return _accepted()
+
+        self._run(runner, [consumer], handler, sleeps.append)
+
+        self.assertEqual(handed_off, [b"offset-100", b"offset-101"])
+        self.assertEqual(consumer.commits, [{self.PARTITION: 101}, {self.PARTITION: 102}])
+        self.assertEqual(broker.committed, {self.PARTITION: 102})
+        self.assertEqual(sleeps, [])
+        self.assertTrue(consumer.closed)
+
+    def test_rejected_message_is_committed_and_does_not_restart_consumption(self) -> None:
+        broker = _FakeKafkaBroker([_record(100, b"malformed-100"), _record(101, b"offset-101")])
+        consumer = _FakeKafkaConsumer(broker)
+        runner = asset_processing_consumer.AssetProcessingKafkaConsumer()
+        handed_off: list[bytes] = []
+        sleeps: list[int] = []
+
+        def handler(value, _db, _topic):
+            handed_off.append(value)
+            if value == b"malformed-100":
+                return _rejected("event validation failed")
+            runner.stop()
+            return _accepted()
+
+        self._run(runner, [consumer], handler, sleeps.append)
+
+        self.assertEqual(handed_off, [b"malformed-100", b"offset-101"])
+        self.assertEqual(consumer.commits, [{self.PARTITION: 101}, {self.PARTITION: 102}])
+        self.assertEqual(broker.committed, {self.PARTITION: 102})
+        self.assertEqual(sleeps, [])
+
+    def test_commit_failure_restarts_consumption_and_redelivers_instead_of_skipping(self) -> None:
+        broker = _FakeKafkaBroker([_record(100, b"offset-100"), _record(101, b"offset-101")])
+        first_run = _FakeKafkaConsumer(broker, commit_error=RuntimeError("offset commit failed"))
+        second_run = _FakeKafkaConsumer(broker)
+        runner = asset_processing_consumer.AssetProcessingKafkaConsumer()
+        attempts: list[bytes] = []
+        sleeps: list[int] = []
+
+        def handler(value, _db, _topic):
+            attempts.append(value)
+            if value == b"offset-101":
+                runner.stop()
+                return _accepted()
+            return _accepted(duplicate=len(attempts) > 1)
+
+        def sleep_with_runaway_guard(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) > 1:
+                runner.stop()
+
+        self._run(runner, [first_run, second_run], handler, sleep_with_runaway_guard)
+
+        self.assertEqual(attempts, [b"offset-100", b"offset-100", b"offset-101"])
+        self.assertEqual(first_run.commits, [])
+        self.assertEqual(second_run.commits, [{self.PARTITION: 101}, {self.PARTITION: 102}])
+        self.assertEqual(broker.committed, {self.PARTITION: 102})
+        self.assertEqual(sleeps, [settings.KAFKA_RECONNECT_BACKOFF_SECONDS])
+        self.assertTrue(first_run.closed)
+        self.assertTrue(second_run.closed)
 
 
 if __name__ == "__main__":

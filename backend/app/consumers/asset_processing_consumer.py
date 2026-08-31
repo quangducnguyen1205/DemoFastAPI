@@ -178,14 +178,23 @@ class AssetProcessingKafkaConsumer:
                             )
                         consumer.commit()
                     except Exception:
-                        logger.exception("asset processing handoff or offset commit failed; offset left uncommitted")
+                        logger.exception(
+                            "asset processing handoff or offset commit failed; "
+                            "restarting consumption without committing "
+                            "topic=%s partition=%s offset=%s context=%s",
+                            getattr(message, "topic", None),
+                            getattr(message, "partition", None),
+                            getattr(message, "offset", None),
+                            _decode_event_context(message.value),
+                        )
+                        raise
                     finally:
                         db.close()
             except Exception:
                 if self._stopped:
                     break
                 logger.exception(
-                    "asset processing Kafka consumer unavailable; retrying in %s seconds",
+                    "asset processing Kafka consumer loop failed; reconnecting in %s seconds",
                     settings.KAFKA_RECONNECT_BACKOFF_SECONDS,
                 )
                 time.sleep(settings.KAFKA_RECONNECT_BACKOFF_SECONDS)
