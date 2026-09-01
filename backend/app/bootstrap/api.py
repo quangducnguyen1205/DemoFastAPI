@@ -1,11 +1,11 @@
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI
 
 from app.bootstrap.assistant import assistant_router
 from app.config.settings import settings
+from app.core.internal_auth import require_internal_access
 from app.core.schema import initialize_database_schema
 from app.routers import internal_processing, videos
 
@@ -33,6 +33,11 @@ async def api_lifespan(_app: FastAPI):
 
 
 def create_api_app() -> FastAPI:
+    if settings.INTERNAL_API_AUTH_ENABLED and not settings.INTERNAL_API_TOKEN:
+        raise RuntimeError(
+            "INTERNAL_API_AUTH_ENABLED requires INTERNAL_API_TOKEN to be configured"
+        )
+
     app = FastAPI(
         title="AI Knowledge Workspace Processing Service",
         description="Internal processing service for upload, transcription, task tracking, and transcript retrieval.",
@@ -41,16 +46,13 @@ def create_api_app() -> FastAPI:
         redoc_url="/redoc",
         lifespan=api_lifespan,
     )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.include_router(videos.router, prefix="/videos", tags=["videos"])
-    app.include_router(assistant_router())
-    app.include_router(internal_processing.router)
+
+    # This service has no browser callers; the public product boundary is the Spring core.
+    # It therefore configures no CORS, and every application router shares one guard.
+    internal_guard = [Depends(require_internal_access)]
+    app.include_router(videos.router, prefix="/videos", tags=["videos"], dependencies=internal_guard)
+    app.include_router(assistant_router(), dependencies=internal_guard)
+    app.include_router(internal_processing.router, dependencies=internal_guard)
 
     @app.get("/")
     def read_root():

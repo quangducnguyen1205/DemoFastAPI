@@ -254,6 +254,12 @@ class Settings:
 
     LOG_LEVEL: str = _env("LOG_LEVEL", "INFO")
 
+    # Shared service credential for the internal HTTP boundary. Disabled by default so the
+    # standalone/local workflow stays open on loopback; the Project3 overlay enables it and
+    # injects the token. Enabling it without a token fails closed at API startup.
+    INTERNAL_API_AUTH_ENABLED: bool = _env_bool("INTERNAL_API_AUTH_ENABLED", False)
+    INTERNAL_API_TOKEN: str = _env("INTERNAL_API_TOKEN", "") or ""
+
     # Internal assistant generation. Disabled by default; Spring supplies all context.
     ASSISTANT_LLM_ENABLED: bool = _env_bool("ASSISTANT_LLM_ENABLED", False)
     ASSISTANT_OLLAMA_BASE_URL: str = _env("ASSISTANT_OLLAMA_BASE_URL", "")
