@@ -10,6 +10,7 @@ from app import models
 from app.schemas import VideoRead
 from app.schemas.transcripts import TranscriptRead
 from app.tasks.video_tasks import process_video_task
+from app.processing.domain.failures import PROCESSING_FAILED
 from app.processing.adapters.direct_upload_compatibility import (
     DIRECT_PROCESSING_DEPRECATION_WARNING,
     upload_video_compatibility,
@@ -39,7 +40,14 @@ async def get_task_status(task_id: str):
         if state == "SUCCESS":
             payload["result"] = res.result
         elif state == "FAILURE":
-            payload["error"] = str(res.result)
+            # res.result is the raw exception the worker raised. Stringifying it here would put
+            # command lines, filesystem paths and driver messages into an external response.
+            logger.warning(
+                "task reported failure task_id=%s failure_type=%s",
+                task_id,
+                type(res.result).__name__,
+            )
+            payload["error"] = PROCESSING_FAILED
         return payload
 
     return await run_in_threadpool(_sync_get_task_status)

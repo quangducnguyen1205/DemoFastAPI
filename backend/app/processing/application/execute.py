@@ -12,7 +12,7 @@ from app.processing.domain.models import (
     ProcessingSucceeded,
     ProcessingTranscriptRow,
 )
-from app.processing.domain.failures import processing_failure_details
+from app.processing.domain.failures import PROCESSING_FAILED, processing_failure_details
 from app.processing.ports.artifact_store import DirectUploadArtifactStore, ProcessingArtifactStore
 from app.processing.ports.media_source import ProcessingMediaSource
 from app.processing.ports.result_sink import ProcessingResultSink
@@ -137,10 +137,12 @@ class ExecuteDirectUploadProcessingApplicationService:
             segments = tuple(row.text for row in rows)
             self._artifact_store.persist_ready(video_id, segments)
             return {"status": "ready", "segments": list(segments)}
-        except Exception as exc:
-            logger.exception("Processing failed")
+        except Exception:
+            # The cause belongs in the log, not in the response: a transcoding failure
+            # stringifies to the whole ffmpeg argument vector, absolute paths included.
+            logger.exception("Processing failed video_id=%s", video_id)
             self._artifact_store.persist_failed(video_id)
-            return {"status": "failed", "error": str(exc)}
+            return {"status": "failed", "error": PROCESSING_FAILED}
 
     def close(self) -> None:
         self._artifact_store.close()

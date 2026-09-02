@@ -6,6 +6,10 @@ _SENSITIVE_VALUE_PATTERN = re.compile(
     r"(?i)(password|secret|token|access[_-]?key|credential)(\s*[=:]\s*)([^\s,;]+)"
 )
 
+# The one generic processing code. It is also the external error text on the deprecated direct
+# surface, whose callers get a stable value while the real cause stays in the worker log.
+PROCESSING_FAILED = "PROCESSING_FAILED"
+
 YOUTUBE_UNAVAILABLE = "YOUTUBE_UNAVAILABLE"
 YOUTUBE_LIVE_NOT_SUPPORTED = "YOUTUBE_LIVE_NOT_SUPPORTED"
 YOUTUBE_DURATION_LIMIT_EXCEEDED = "YOUTUBE_DURATION_LIMIT_EXCEEDED"
@@ -95,7 +99,7 @@ class YouTubeNetworkTransientError(YouTubeAcquisitionError):
 def processing_failure_details(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, YouTubeAcquisitionError):
         return exc.code, exc.safe_message
-    return "PROCESSING_FAILED", safe_processing_error_message(exc)
+    return PROCESSING_FAILED, safe_processing_error_message(exc)
 
 
 def safe_processing_error_message(exc: Exception) -> str:
