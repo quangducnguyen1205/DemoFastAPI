@@ -14,6 +14,23 @@ YOUTUBE_ACQUISITION_TIMEOUT = "YOUTUBE_ACQUISITION_TIMEOUT"
 YOUTUBE_ACQUISITION_FAILED = "YOUTUBE_ACQUISITION_FAILED"
 
 
+class MediaTranscodingTimeoutError(RuntimeError):
+    """Audio extraction exceeded its bound and the ffmpeg child was killed.
+
+    Reported to Spring as an ordinary ``PROCESSING_FAILED``: the external contract deliberately
+    carries one generic processing code, and the timeout family stays visible in the diagnostic
+    message and the worker logs.
+    """
+
+    diagnostic_family = "media_transcoding_timeout"
+    retryable = False
+
+    def __init__(self, timeout_seconds: float) -> None:
+        super().__init__(
+            f"Audio extraction exceeded the configured timeout of {timeout_seconds:g}s"
+        )
+
+
 class YouTubeAcquisitionError(RuntimeError):
     code = YOUTUBE_ACQUISITION_FAILED
     safe_message = "YouTube media acquisition failed"

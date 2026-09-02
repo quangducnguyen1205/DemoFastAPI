@@ -1,8 +1,13 @@
+import logging
 import os
 import subprocess
 import threading
 from typing import Any, List
+from app.config.settings import settings
+from app.processing.domain.failures import MediaTranscodingTimeoutError
 from app.utils import DEFAULT_TRANSCRIPT_CHUNK_CHARS, split_transcript_text
+
+logger = logging.getLogger(__name__)
 
 _whisper_model = None
 _whisper_model_lock = threading.Lock()
@@ -18,14 +23,40 @@ def get_whisper_model(model_name: str = "base"):
     return _whisper_model
 
 
-def extract_audio_to_wav(abs_video_path: str, temp_dir: str, sample_rate: int = 16000) -> str:
-    """Extract mono WAV audio from a video to a temp file and return the path."""
+def extract_audio_to_wav(
+    abs_video_path: str,
+    temp_dir: str,
+    sample_rate: int = 16000,
+    *,
+    timeout_seconds: float | None = None,
+) -> str:
+    """Extract mono WAV audio from a video to a temp file and return the path.
+
+    Bounded: a malformed or pathological input cannot leave ffmpeg running. On expiry
+    ``subprocess.run`` kills the child and reaps it before raising, so nothing is orphaned, and the
+    partly written WAV goes away with the caller's temporary directory.
+    """
     audio_path = os.path.join(temp_dir, "audio.wav")
     cmd = [
         "ffmpeg", "-y", "-i", abs_video_path,
         "-vn", "-ac", "1", "-ar", str(sample_rate), audio_path
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    bound = settings.FFMPEG_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=bound,
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.warning(
+            "audio extraction timed out failure_family=%s timeout_seconds=%g",
+            MediaTranscodingTimeoutError.diagnostic_family,
+            bound,
+        )
+        raise MediaTranscodingTimeoutError(bound) from exc
     return audio_path
 
 

@@ -18,6 +18,13 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     worker_prefetch_multiplier=settings.CELERY_WORKER_PREFETCH_MULTIPLIER,
+    # No processing attempt may hold a worker slot indefinitely. The soft limit raises
+    # SoftTimeLimitExceeded inside the running task, which the processing use case handles like any
+    # other failure: it persists the failure, publishes one result and releases the lease. The hard
+    # limit is the net for work that cannot be interrupted in Python; it kills the worker child,
+    # which Celery replaces, so capacity returns on its own.
+    task_soft_time_limit=settings.PROCESSING_SOFT_TIME_LIMIT_SECONDS,
+    task_time_limit=settings.PROCESSING_HARD_TIME_LIMIT_SECONDS,
     broker_transport_options={
         "visibility_timeout": settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS,
     },

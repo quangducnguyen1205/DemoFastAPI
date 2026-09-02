@@ -143,6 +143,44 @@ class Settings:
             "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS"
         )
 
+    # Audio extraction only decodes a stream to mono 16 kHz WAV, which stays far below this even
+    # for the longest supported media; the bound exists so a malformed file cannot wedge ffmpeg.
+    FFMPEG_TIMEOUT_SECONDS: int = _env_bounded_positive_int(
+        "FFMPEG_TIMEOUT_SECONDS",
+        900,
+        7_200,
+    )
+    # Upper bound on one whole processing attempt. Reached only when something is wedged: the
+    # longest supported media (YOUTUBE_MAX_DURATION_SECONDS) plus acquisition and extraction fits
+    # inside it. Raising SoftTimeLimitExceeded inside the task lets the attempt persist its
+    # failure, publish the result and release its lease.
+    PROCESSING_SOFT_TIME_LIMIT_SECONDS: int = _env_bounded_positive_int(
+        "PROCESSING_SOFT_TIME_LIMIT_SECONDS",
+        10_800,
+        86_400,
+    )
+    # Last resort. The worker child is killed, so no application cleanup runs; the difference
+    # between the two limits is the budget graceful handling gets.
+    PROCESSING_HARD_TIME_LIMIT_SECONDS: int = _env_bounded_positive_int(
+        "PROCESSING_HARD_TIME_LIMIT_SECONDS",
+        11_100,
+        86_400,
+    )
+    if PROCESSING_SOFT_TIME_LIMIT_SECONDS >= PROCESSING_HARD_TIME_LIMIT_SECONDS:
+        raise ValueError(
+            "PROCESSING_SOFT_TIME_LIMIT_SECONDS must be less than "
+            "PROCESSING_HARD_TIME_LIMIT_SECONDS"
+        )
+    if PROCESSING_HARD_TIME_LIMIT_SECONDS >= PROCESSING_LEASE_SECONDS:
+        raise ValueError(
+            "PROCESSING_HARD_TIME_LIMIT_SECONDS must be less than PROCESSING_LEASE_SECONDS "
+            "so a killed attempt still holds a lease that expires afterwards"
+        )
+    if FFMPEG_TIMEOUT_SECONDS >= PROCESSING_SOFT_TIME_LIMIT_SECONDS:
+        raise ValueError(
+            "FFMPEG_TIMEOUT_SECONDS must be less than PROCESSING_SOFT_TIME_LIMIT_SECONDS"
+        )
+
     # Kafka consumer configuration. The broker itself is owned outside this repo.
     KAFKA_BOOTSTRAP_SERVERS: str = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     KAFKA_ASSET_PROCESSING_TOPIC: str = _env("KAFKA_ASSET_PROCESSING_TOPIC", "asset.processing.requested.v1")
