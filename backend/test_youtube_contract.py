@@ -1,5 +1,7 @@
+import json
 import unittest
 from datetime import UTC, datetime
+from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -90,6 +92,92 @@ def v2_event(
             "requestedAt": "2026-07-27T00:00:00Z",
         },
     }
+
+
+CONTRACT_FIXTURES = Path(__file__).parent / "tests" / "contract"
+
+
+def canonical_payload(name: str) -> dict:
+    with open(CONTRACT_FIXTURES / name, encoding="utf-8") as handle:
+        return json.loads(handle.read())
+
+
+class ProducerSerializationContractTest(unittest.TestCase):
+    """Parses the exact bytes the producer's own serializer emits.
+
+    The fixtures under tests/contract mirror
+    services/workspace-core/src/test/resources/contract in ai-knowledge-workspace, where they are
+    asserted byte for byte against the application-managed ObjectMapper. Hand-written payloads in
+    this file prove only that the parser accepts what this repository imagines; these prove it
+    accepts what Spring actually publishes. requestedAt is the field that matters: the payload
+    models below declare it as a string, and a mapper configured to write timestamps would emit a
+    number here instead.
+    """
+
+    def test_v1_payload_from_the_producer_serializer_is_accepted(self) -> None:
+        payload = canonical_payload("processing-requested-v1.json")
+        self.assertIsInstance(payload["requestedAt"], str)
+
+        event = parse_asset_processing_requested_event(
+            {
+                "eventId": "44444444-4444-4444-4444-444444444444",
+                "eventType": "asset.processing.requested",
+                "eventVersion": 1,
+                "aggregateType": "Asset",
+                "aggregateId": payload["assetId"],
+                "occurredAt": "2026-07-01T10:15:30Z",
+                "payload": payload,
+            }
+        )
+        command = event.to_processing_command()
+        self.assertIsInstance(command, ProcessingRequestCommand)
+        self.assertEqual(command.asset_id, "11111111-1111-1111-1111-111111111111")
+        self.assertEqual(command.storage_bucket, "workspace-media")
+        self.assertEqual(
+            command.object_key,
+            "users/learner-1/workspaces/learning/assets/lesson/raw/lesson.mp4",
+        )
+        self.assertEqual(command.content_type, "video/mp4")
+        self.assertEqual(command.size_bytes, 4096)
+        self.assertEqual(command.requested_at, "2026-07-01T10:15:30Z")
+
+    def test_v2_payload_from_the_producer_serializer_is_accepted(self) -> None:
+        payload = canonical_payload("processing-requested-v2.json")
+        self.assertIsInstance(payload["requestedAt"], str)
+
+        event = parse_youtube_asset_processing_requested_event(
+            {
+                "eventId": "44444444-4444-4444-4444-444444444444",
+                "eventType": "asset.processing.requested",
+                "eventVersion": 2,
+                "aggregateType": "ASSET",
+                "aggregateId": payload["assetId"],
+                "occurredAt": "2026-07-01T10:15:30Z",
+                "payload": payload,
+            }
+        )
+        command = event.to_processing_command()
+        self.assertIsInstance(command, YouTubeProcessingRequestCommand)
+        self.assertEqual(command.youtube_video_id, "abc_DEF-123")
+        self.assertEqual(command.requested_at, "2026-07-01T10:15:30Z")
+
+    def test_a_timestamp_number_for_requested_at_is_rejected_not_silently_coerced(self) -> None:
+        # Guards the direction of the drift: if the producer were ever reconfigured to write dates
+        # as timestamps, this consumer would reject the event rather than accept a wrong value.
+        payload = canonical_payload("processing-requested-v1.json")
+        payload["requestedAt"] = 1783246530
+        with self.assertRaises(EventValidationError):
+            parse_asset_processing_requested_event(
+                {
+                    "eventId": "44444444-4444-4444-4444-444444444444",
+                    "eventType": "asset.processing.requested",
+                    "eventVersion": 1,
+                    "aggregateType": "Asset",
+                    "aggregateId": payload["assetId"],
+                    "occurredAt": "2026-07-01T10:15:30Z",
+                    "payload": payload,
+                }
+            )
 
 
 class YouTubeV2EventContractTest(unittest.TestCase):
