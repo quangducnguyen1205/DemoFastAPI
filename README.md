@@ -183,10 +183,17 @@ Explicit indexing recovery, manual/one-shot relays, exact-ID recovery, and legac
   retry loop. An active lease is polled every
   `PROCESSING_LEASE_RETRY_POLL_SECONDS` (300 by default), never with a countdown for the full
   four-hour lease. The poll interval is validated below the explicit
-  `CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS` (3600 by default), so Redis cannot repeatedly
+  `CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS` (12600 by default), so Redis cannot repeatedly
   redeliver a long lease-expiry ETA or accumulate copies of it in worker memory. Each active
   delivery publishes at most one short successor; polling ends when the database lease is
   reclaimed or the request becomes terminal.
+- Redis emulates acknowledgement, and it measures visibility from delivery without refreshing it
+  while a task runs. `CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS` is therefore validated to sit
+  strictly between `PROCESSING_HARD_TIME_LIMIT_SECONDS` and `PROCESSING_LEASE_SECONDS`: above the
+  hard limit so a healthy long attempt is never redelivered mid-flight, and below the lease so a
+  lost worker's delivery is queued again before the lease it abandoned expires. The lease, not the
+  broker, sets crash-recovery latency. A co-tenant application on the same Redis with a shorter
+  visibility setting still restores these deliveries, because the shortest configured value wins.
 - Result publication is also at-least-once. Producer idempotence does not make the outbox relay end-to-end exactly-once because a process can still publish and crash before marking the row `published`. Spring consumers must be idempotent by result `eventId`.
 - The automatic result relay only relays due FastAPI processing result outbox rows for the existing `transcript.ready` and `asset.processing.failed` contracts. It does not scan arbitrary event tables and it does not recover rows stuck in `publishing`.
 - FastAPI treats Kafka as transport and MinIO object keys as references; product metadata, authorization, workspace state, and final product status remain owned by Repo B.

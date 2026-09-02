@@ -122,9 +122,14 @@ class Settings:
         "CELERY_WORKER_PREFETCH_MULTIPLIER",
         1,
     )
+    # Redis has no server-side acknowledgement. kombu.transport.redis.QoS.append stamps a delivery
+    # with the wall clock once, and restore_visible() pushes every delivery older than this bound
+    # back onto the queue; nothing refreshes that stamp while the task runs, so this measures time
+    # since delivery, not time since the worker was last alive. It must therefore outlast the
+    # longest attempt a worker may legitimately hold -- see the invariant below.
     CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = _env_bounded_positive_int(
         "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS",
-        3_600,
+        12_600,
         86_400,
     )
     PROCESSING_LEASE_RETRY_POLL_SECONDS: int = _env_bounded_positive_int(
@@ -179,6 +184,23 @@ class Settings:
     if FFMPEG_TIMEOUT_SECONDS >= PROCESSING_SOFT_TIME_LIMIT_SECONDS:
         raise ValueError(
             "FFMPEG_TIMEOUT_SECONDS must be less than PROCESSING_SOFT_TIME_LIMIT_SECONDS"
+        )
+    # Broker visibility is a delivery bound, not an execution bound, and the two must agree. Below
+    # the hard limit, Redis restores a healthy attempt's own delivery while it is still running and
+    # a second worker spends the rest of that attempt polling a lease the original still holds.
+    # Above the lease, a lost worker's delivery is still invisible when the lease it abandoned
+    # expires, so nothing is in the queue to reclaim the request and recovery latency moves from
+    # the lease onto the broker.
+    if not (
+        PROCESSING_HARD_TIME_LIMIT_SECONDS
+        < CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS
+        < PROCESSING_LEASE_SECONDS
+    ):
+        raise ValueError(
+            "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS must be greater than "
+            "PROCESSING_HARD_TIME_LIMIT_SECONDS so a healthy attempt is never redelivered while "
+            "it runs, and less than PROCESSING_LEASE_SECONDS so a lost worker's delivery is back "
+            "in the queue before the lease it abandoned expires"
         )
 
     # Kafka consumer configuration. The broker itself is owned outside this repo.

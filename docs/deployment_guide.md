@@ -114,22 +114,39 @@ an active lease skips MinIO/yt-dlp/ffmpeg/Whisper and polls the database again a
 short countdown. A controlled processing exception is converted to one durable terminal
 `failed` V1 result and returns normally, so it does not create an unbounded Celery retry loop.
 
-The local `PROCESSING_LEASE_SECONDS=14400` default is intentionally conservative. Before adding
-Celery hard/soft task limits or using production-sized media, coordinate the lease with those
-limits and measured Whisper throughput. Too-short leases can allow two workers to perform the
-same external transcription; attempt fencing and result idempotency still prevent duplicate
-terminal product effects, but they cannot eliminate duplicated external compute.
+The local `PROCESSING_LEASE_SECONDS=14400` default is intentionally conservative and is the
+outermost bound of the model. Too-short leases can allow two workers to perform the same external
+transcription; attempt fencing and result idempotency still prevent duplicate terminal product
+effects, but they cannot eliminate duplicated external compute.
 
-Celery 5.5's Redis transport defaults to a 3600-second visibility timeout. The Compose defaults
-make that value explicit with `CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS=3600` across Celery
-producers and workers, and configure `PROCESSING_LEASE_RETRY_POLL_SECONDS=300`. The application
-accepts poll values from 1 through 300 seconds, fails startup if the poll is not shorter than
-visibility, and caps every calculated retry below visibility. Do not set polling to the full
-processing lease: Redis can redeliver an
-unacknowledged ETA repeatedly after visibility expires, and workers hold ETA messages in memory.
-The one-hour visibility default is deliberately not raised to four hours because a forced
-worker/host loss would then delay broker recovery for up to four hours. If applications share a
-Redis broker, keep the visibility settings aligned because the shortest configured value wins.
+Celery's Redis transport defaults to a 3600-second visibility timeout. Redis has no server-side
+acknowledgement: `kombu.transport.redis.QoS.append` stamps a delivery with the wall clock once and
+`restore_visible()` puts every delivery older than the visibility timeout back on the queue.
+Nothing refreshes that stamp while a task executes, and neither worker heartbeats nor
+`acks_late=true` extend it. Visibility is a delivery bound, not an execution bound, so with the
+processing time limits in place the transport default is too short: a healthy attempt longer than
+an hour has its own delivery restored while it is still running.
+
+The Compose defaults therefore set `CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS=12600` across Celery
+producers and workers, and configure `PROCESSING_LEASE_RETRY_POLL_SECONDS=300`. Startup fails
+unless
+
+```text
+PROCESSING_HARD_TIME_LIMIT_SECONDS < CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS < PROCESSING_LEASE_SECONDS
+```
+
+Above the hard limit, no healthy attempt can outlive its own delivery. Below the lease, a lost
+worker's delivery is back in the queue before the lease it abandoned expires, so recovery latency
+stays governed by the lease rather than by the broker; raising visibility to or beyond the lease
+would move that latency onto the broker instead. Losing a whole worker or host is still recovered
+within the lease: the restored delivery finds an active lease, polls, and reclaims the request
+when the lease expires.
+
+The application also accepts poll values from 1 through 300 seconds, fails startup if the poll is
+not shorter than visibility, and caps every calculated retry below visibility. Do not set polling
+to the full processing lease: Redis can redeliver an unacknowledged ETA repeatedly after
+visibility expires, and workers hold ETA messages in memory. If applications share a Redis broker,
+keep the visibility settings aligned because the shortest configured value wins.
 
 ## YouTube V2 runtime
 

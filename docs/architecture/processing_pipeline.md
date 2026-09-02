@@ -86,8 +86,12 @@ it with any future Celery task limits and measured media-size/Whisper throughput
 object-storage and YouTube tasks use one-message prefetch, late acknowledgement, and
 worker-lost rejection/requeue.
 
-Redis transport keeps its one-hour visibility timeout explicit through
-`CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS=3600`. Active-lease redelivery does not schedule a
+Redis transport keeps its visibility timeout explicit through
+`CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS=12600`, validated to sit strictly between
+`PROCESSING_HARD_TIME_LIMIT_SECONDS` and `PROCESSING_LEASE_SECONDS`. Redis measures visibility
+from delivery and never refreshes it while a task runs, so a value below the hard limit would
+restore a healthy attempt's own delivery mid-flight, and a value at or above the lease would leave
+a lost worker's delivery invisible past the moment its lease frees. Active-lease redelivery does not schedule a
 countdown for the remaining four-hour lease. It publishes one successor after at most
 `PROCESSING_LEASE_RETRY_POLL_SECONDS=300`, acknowledges the current delivery through Celery's
 normal `Retry` handling, and checks the database again. Configuration rejects a poll interval

@@ -82,7 +82,7 @@ class ProcessingSettingsTest(unittest.TestCase):
         self.assertFalse(settings.PROCESSING_OUTBOX_AUTO_RELAY_ENABLED)
         self.assertFalse(settings.PROCESSING_OUTBOX_RECOVERY_ENABLED)
         self.assertEqual(settings.CELERY_WORKER_PREFETCH_MULTIPLIER, 1)
-        self.assertEqual(settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS, 3_600)
+        self.assertEqual(settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS, 12_600)
         self.assertEqual(settings.PROCESSING_LEASE_RETRY_POLL_SECONDS, 300)
         self.assertEqual(settings.PROCESSING_LEASE_SECONDS, 14_400)
         self.assertEqual(

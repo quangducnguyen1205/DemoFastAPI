@@ -6,6 +6,7 @@ signal-delivered exception Celery's soft time limit raises. Tests that merely as
 ``raise TimeoutError`` would prove nothing about either.
 """
 
+import importlib
 import os
 import signal
 import subprocess
@@ -18,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from celery.exceptions import SoftTimeLimitExceeded
 
+import app.config.settings as settings_module
 from app.config.settings import settings
 from app.core.celery_app import celery_app
 from app.processing.adapters.whisper_transcriber import WhisperProcessingTranscriptionProvider
@@ -171,6 +173,72 @@ class CeleryExecutionBoundTests(unittest.TestCase):
             settings.YOUTUBE_MAX_DURATION_SECONDS + acquisition_and_extraction,
             "legitimate media at the supported maximum must not be cut off",
         )
+
+
+class BrokerVisibilityBoundTests(unittest.TestCase):
+    """The broker's delivery bound and the worker's execution bound must agree.
+
+    Redis emulates acknowledgement: kombu.transport.redis.QoS.append stamps a delivery once and
+    restore_visible() puts anything older than the visibility timeout back on the queue. Nothing
+    refreshes that stamp while a task executes, so a visibility timeout shorter than an attempt
+    redelivers healthy work in flight.
+    """
+
+    def _load_settings(self, overrides: dict[str, str]):
+        environment = {"DOTENV_PATH": "/tmp/nonexistent-project3-env", **overrides}
+        try:
+            with patch.dict(os.environ, environment, clear=True):
+                return importlib.reload(settings_module).settings
+        finally:
+            importlib.reload(settings_module)
+
+    def test_visibility_outlasts_the_longest_attempt_a_worker_may_hold(self) -> None:
+        self.assertGreater(
+            settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS,
+            settings.PROCESSING_HARD_TIME_LIMIT_SECONDS,
+            "a healthy attempt must never have its own delivery restored while it runs",
+        )
+
+    def test_visibility_expires_before_the_lease_it_has_to_hand_back(self) -> None:
+        self.assertLess(
+            settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS,
+            settings.PROCESSING_LEASE_SECONDS,
+            "a lost worker's delivery must be queued again before its lease expires, "
+            "so the lease and not the broker sets the recovery latency",
+        )
+
+    def test_every_transport_surface_carries_the_same_visibility_bound(self) -> None:
+        expected = settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS
+        self.assertEqual(
+            celery_app.conf.broker_transport_options["visibility_timeout"], expected
+        )
+        self.assertEqual(
+            celery_app.conf.result_backend_transport_options["visibility_timeout"], expected
+        )
+        self.assertEqual(celery_app.conf.visibility_timeout, expected)
+
+    def test_a_visibility_shorter_than_the_hard_limit_fails_configuration(self) -> None:
+        # 3600 is Redis' own default and was this service's value before the execution bounds
+        # existed; with them it lets a healthy attempt be redelivered after one hour.
+        with self.assertRaises(ValueError):
+            self._load_settings({"CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS": "3600"})
+
+    def test_a_visibility_outlasting_the_lease_fails_configuration(self) -> None:
+        for value in ("14400", "20000"):
+            with self.subTest(visibility=value):
+                with self.assertRaises(ValueError):
+                    self._load_settings({"CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS": value})
+
+    def test_raising_the_execution_bounds_alone_cannot_silently_pass_the_visibility_bound(
+        self,
+    ) -> None:
+        with self.assertRaises(ValueError):
+            self._load_settings(
+                {
+                    "PROCESSING_SOFT_TIME_LIMIT_SECONDS": "12600",
+                    "PROCESSING_HARD_TIME_LIMIT_SECONDS": "13000",
+                }
+            )
 
 
 class interrupt_after:
